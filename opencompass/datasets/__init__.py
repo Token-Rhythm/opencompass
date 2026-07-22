@@ -1,5 +1,6 @@
 from .advancedIF import AdvancedIFDataset  # noqa: F401
 from .advancedIF import advancedif_rubric_postprocess  # noqa: F401
+from .aa_lcr import *  # noqa: F401, F403
 from .advglue import *  # noqa: F401, F403
 from .afqmcd import *  # noqa: F401, F403
 from .agieval import *  # noqa: F401, F403
@@ -140,6 +141,7 @@ from .mol_instructions_chem import *  # noqa: F401, F403
 from .moleculariq import *  # noqa: F401, F403
 from .mp20 import *  # noqa: F401, F403
 from .mrcr import *  # noqa: F401, F403
+from .multichallenge import *  # noqa: F401, F403
 from .multipl_e import *  # noqa: F401, F403
 from .multirc import *  # noqa: F401, F403
 from .musr import *  # noqa: F401, F403
@@ -156,6 +158,7 @@ from .OpenFinData import *  # noqa: F401, F403
 from .OpenSWI import *  # noqa: F401, F403
 from .perspectivegap import *  # noqa: F401, F403
 from .phybench import *  # noqa: F401, F403
+from .polymath import *  # noqa: F401, F403
 from .physics import *  # noqa: F401, F403
 from .PI_LLM import PILLMDataset  # noqa: F401
 from .piqa import *  # noqa: F401, F403
