@@ -71,11 +71,13 @@ from .GaokaoBench import *  # noqa: F401, F403
 from .generic import *  # noqa: F401, F403
 from .govrepcrs import *  # noqa: F401, F403
 from .gpqa import *  # noqa: F401, F403
+from .global_piqa import *  # noqa: F401, F403
 from .gsm8k import *  # noqa: F401, F403
 from .gsm_hard import *  # noqa: F401, F403
 from .healthbench.healthbench import *  # noqa: F401, F403
 from .hellaswag import *  # noqa: F401, F403
 from .hle import *  # noqa: F401, F403
+from .hmmt_2025 import *  # noqa: F401, F403
 from .huggingface import *  # noqa: F401, F403
 from .humaneval import *  # noqa: F401, F403
 from .humaneval_multi import *  # noqa: F401, F403
@@ -86,6 +88,7 @@ from .IFBench.ifbench import IFBenchEvaluator  # noqa: F401, F403
 from .IFEval.ifeval import IFEvalDataset, IFEvaluator  # noqa: F401, F403
 from .inference_ppl import InferencePPLDataset  # noqa: F401, F403
 from .infinitebench import *  # noqa: F401, F403
+from .include import *  # noqa: F401, F403
 from .internsandbox import *  # noqa: F401, F403
 from .inverse_ifeval import InverseIFEvalDataset  # noqa: F401
 from .inverse_ifeval import InverseIFEvalJudgePromptTemplate  # noqa: F401
@@ -129,6 +132,8 @@ from .mgsm import *  # noqa: F401, F403
 from .mmlu import *  # noqa: F401, F403
 from .mmlu_cf import *  # noqa: F401, F403
 from .mmlu_pro import *  # noqa: F401, F403
+from .mmlu_prox import *  # noqa: F401, F403
+from .mmlu_redux import *  # noqa: F401, F403
 from .MMLUArabic import *  # noqa: F401, F403
 from .mmmlu import *  # noqa: F401, F403
 from .mol_instructions_chem import *  # noqa: F401, F403

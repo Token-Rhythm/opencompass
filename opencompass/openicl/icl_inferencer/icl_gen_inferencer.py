@@ -60,6 +60,7 @@ class GenInferencer(BaseInferencer):
             output_json_filepath: Optional[str] = './icl_inference_output',
             output_json_filename: Optional[str] = 'predictions',
             save_every: Optional[int] = 1,
+            generation_kwargs: Optional[dict] = None,
             **kwargs) -> None:
         super().__init__(
             model=model,
@@ -74,6 +75,7 @@ class GenInferencer(BaseInferencer):
         self.max_out_len = max_out_len
         self.min_out_len = min_out_len
         self.stopping_criteria = stopping_criteria
+        self.generation_kwargs = generation_kwargs or {}
         self.dump_timer = kwargs.get('dump_timer', False)
         self.dump_res_length = kwargs.get('dump_res_length', False)
         self.dump_only_message_path = kwargs.get('dump_only_message_path',
@@ -142,7 +144,7 @@ class GenInferencer(BaseInferencer):
                 entry = datum
                 golds = [None for _ in range(len(entry))]
             # 5-1. Inference with local model
-            extra_gen_kwargs = {}
+            extra_gen_kwargs = copy.deepcopy(self.generation_kwargs)
             sig = inspect.signature(self.model.generate)
             if 'stopping_criteria' in sig.parameters:
                 extra_gen_kwargs['stopping_criteria'] = self.stopping_criteria

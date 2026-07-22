@@ -605,6 +605,12 @@
     paper: https://arxiv.org/pdf/2110.14168v2
     configpath: opencompass/configs/datasets/gsm8k/gsm8k_gen.py
     configpath_llmjudge: ''
+- global_piqa:
+    name: Global PIQA
+    category: Language / Reasoning
+    paper: https://arxiv.org/abs/2510.24081
+    configpath: opencompass/configs/datasets/global_piqa/global_piqa_generation.py
+    configpath_llmjudge: ''
 - gsm_hard:
     name: GSM-Hard
     category: Math
@@ -761,6 +767,12 @@
     paper: https://arxiv.org/pdf/2009.03300
     configpath: opencompass/configs/datasets/mmlu/mmlu_gen.py
     configpath_llmjudge: opencompass/configs/datasets/mmlu/mmlu_llm_judge_gen.py
+- mmlu_redux:
+    name: MMLU-Redux 2.0
+    category: Understanding
+    paper: https://arxiv.org/abs/2406.04127
+    configpath: opencompass/configs/datasets/mmlu_redux/mmlu_redux_gen.py
+    configpath_llmjudge: ''
 - SciEval:
     name: SciEval
     category: Understanding
@@ -779,6 +791,12 @@
     paper: https://arxiv.org/pdf/2406.01574
     configpath: opencompass/configs/datasets/mmlu_pro/mmlu_pro_gen.py
     configpath_llmjudge: opencompass/configs/datasets/mmlu_pro/mmlu_pro_llm_judge_gen.py
+- mmlu_prox:
+    name: MMLU-ProX
+    category: Language / Understanding
+    paper: https://arxiv.org/abs/2503.10497
+    configpath: opencompass/configs/datasets/mmlu_prox/mmlu_prox_5shot_cot_gen.py
+    configpath_llmjudge: ''
 - mmmlu:
     name: MMMLU
     category: Language / Understanding
@@ -1392,6 +1410,18 @@
     category: Math
     paper: https://matharena.ai/
     configpath: opencompass/configs/datasets/hmmt2026/hmmt2026_cascade_eval_gen_6ff468.py
+    configpath_llmjudge: ''
+- hmmt_2025:
+    name: HMMT February/November 2025
+    category: Math
+    paper: https://matharena.ai/competitions
+    configpath: opencompass/configs/datasets/hmmt_2025/hmmt_2025_matharena_gen.py
+    configpath_llmjudge: ''
+- include_base_44:
+    name: INCLUDE base-44
+    category: Language / Understanding
+    paper: https://arxiv.org/abs/2411.19799
+    configpath: opencompass/configs/datasets/include/include_base_44_0shot_ppl.py
     configpath_llmjudge: ''
 - zebralogic:
     name: ZebraLogic
