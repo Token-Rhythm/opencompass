@@ -5,6 +5,7 @@ from opencompass.openicl.icl_retriever import ZeroRetriever
 
 mmlu_redux_reader_cfg = dict(input_columns=['prompt'],
                              output_column='answer_letter',
+                             train_split='test',
                              test_split='test')
 mmlu_redux_infer_cfg = dict(prompt_template=dict(type=PromptTemplate,
                                                  template='{prompt}'),

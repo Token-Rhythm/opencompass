@@ -56,7 +56,7 @@ class AALCRDataset(BaseDataset):
     """Load the 100 official questions and their ordered document sets."""
 
     @staticmethod
-    def load(path=AA_LCR_PATH, revision=AA_LCR_REVISION):
+    def load(path=AA_LCR_PATH, revision=AA_LCR_REVISION, mode=None):
         csv_path = hf_hub_download(path,
                                    'AA-LCR_Dataset.csv',
                                    repo_type='dataset',

@@ -7,6 +7,7 @@ hmmt_2025_datasets = []
 for competition in ('feb', 'nov'):
     reader_cfg = dict(input_columns=['prompt'],
                       output_column='answer',
+                      train_split='test',
                       test_split='test')
     infer_cfg = dict(prompt_template=dict(type=PromptTemplate,
                                           template='{prompt}'),

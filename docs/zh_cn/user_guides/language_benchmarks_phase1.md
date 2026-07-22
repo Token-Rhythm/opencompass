@@ -20,6 +20,49 @@ HMMT 的官方 MathArena parser 依赖 extra requirements 中的
 commit `a11194deff8c67a232974a383795e8a2776b4c6f`，以避免安装完整、
 Python 3.12-only 的 MathArena 工程。
 
+通过 vLLM 的 OpenAI-compatible 服务运行 INCLUDE 时，模型配置必须使用
+`VLLMOpenAIAPI`，并把 `openai_api_base` 指向 `/v1` 根路径。该模型类默认对普通生成
+任务使用 `/v1/chat/completions`，但对 INCLUDE 使用 `/v1/completions` 的
+`prompt_logprobs=0` 和 `return_token_ids=true`：分别计算 `" A"`、`" B"`、
+`" C"`、`" D"` continuation 的全部 token log-probability 之和，再取最大值。
+此流程不使用 chat template、生成答案或 LLM Judge。
+
+```python
+from opencompass.models import VLLMOpenAIAPI
+
+models = [dict(
+    type=VLLMOpenAIAPI,
+    abbr='qwen3.5-9b-vllm',
+    path='Qwen3.5-9B',
+    key='EMPTY',
+    openai_api_base='http://127.0.0.1:8000/v1',
+    max_seq_len=65536,
+)]
+```
+
+MMLU-Redux、MMLU-ProX 和 Global PIQA 的上述 lm-evaluation-harness 固定版本
+使用原始 completion prompt；官方 MMLU-ProX 复现命令也没有传
+`--apply_chat_template`。如果目标是对齐该协议，而不只是用指令模型做 chat
+评测，应显式使用原始生成端点并且不要配置 `meta_template`：
+
+```python
+models = [dict(
+    type=VLLMOpenAIAPI,
+    abbr='qwen3.5-9b-vllm-raw',
+    path='Qwen3.5-9B',
+    key='EMPTY',
+    openai_api_base='http://127.0.0.1:8000/v1',
+    generation_endpoint='completions',
+    meta_template=None,
+    max_seq_len=131072,
+)]
+```
+
+`generation_endpoint='completions'` 只改变生成任务的传输方式；INCLUDE 无论该
+选项为何值，都使用原始 completions prompt logprob。若改用 chat endpoint，题面
+文字仍相同，但 chat template 会增加 system/user/assistant token，所得分数不再是
+上述 lm-evaluation-harness 原始协议的严格复现。
+
 ## 数据和协议固定点
 
 | Benchmark | 官方数据 revision | 复现协议 |

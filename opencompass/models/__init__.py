@@ -51,6 +51,7 @@ from .turbomind_with_tf_above_v4_33 import \
     TurboMindModelwithChatTemplate  # noqa: F401
 from .unigpt_api import UniGPT  # noqa: F401
 from .vllm import VLLM  # noqa: F401
+from .vllm_openai_api import VLLMOpenAIAPI  # noqa: F401
 from .vllm_with_tf_above_v4_33 import VLLMwithChatTemplate  # noqa: F401
 from .xunfei_api import XunFei, XunFeiSpark  # noqa: F401
 from .yayi_api import Yayi  # noqa: F401

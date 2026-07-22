@@ -56,6 +56,23 @@ class TestDefaultSummarizer(unittest.TestCase):
             # Should log a warning about prompt_db being deprecated
             mock_log.warning.assert_called()
 
+    def test_chat_inferencer_is_reported_as_generation(self):
+        self.config.datasets = [
+            ConfigDict({
+                'abbr': 'chat_dataset',
+                'infer_cfg': {
+                    'inferencer': {
+                        'type': 'ChatInferencer'
+                    }
+                }
+            })
+        ]
+        summarizer = DefaultSummarizer(config=self.config)
+
+        *_, modes = summarizer._pick_up_results()
+
+        self.assertEqual(modes['chat_dataset'], 'gen')
+
 
 if __name__ == '__main__':
     unittest.main()

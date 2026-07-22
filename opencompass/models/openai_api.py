@@ -770,22 +770,30 @@ class OpenAISDK(OpenAI):
                         self.logger.info(responses)
                     except Exception:
                         pass  # noqa F841
+
+                message = (responses.choices[0].message
+                           if responses.choices else None)
+                content = getattr(message, 'content', '') or ''
+                reasoning_content = getattr(message, 'reasoning_content', '')
+                if not isinstance(reasoning_content, str):
+                    reasoning_content = ''
+                reasoning = getattr(message, 'reasoning', '')
+                if not isinstance(reasoning, str):
+                    reasoning = ''
+                reasoning_content = reasoning_content or reasoning
+
                 # Check if response is empty or content is empty
-                if (not responses.choices or not responses.choices[0].message
-                        or
-                    (not responses.choices[0].message.content and not getattr(
-                        responses.choices[0].message,
-                        'reasoning_content',
-                        '',
-                    ))):  # noqa: E125
+                if not message or (not content and not reasoning_content):
                     # There is case that server does not return any content
-                    if responses.choices[0].finish_reason == 'stop':
+                    finish_reason = (responses.choices[0].finish_reason
+                                     if responses.choices else None)
+                    if finish_reason == 'stop':
                         self.logger.info(
                             'Server does not return any content '
                             'and stop reason is <stop>, '
                             'the input query is: %s', query_data)
                         return ''
-                    if responses.choices[0].finish_reason == 'content_filter':
+                    if finish_reason == 'content_filter':
                         self.logger.info(
                             'The answer for this question is filtered,'
                             'the stop reason is <content_filter>, '
@@ -800,9 +808,6 @@ class OpenAISDK(OpenAI):
                     num_retries += 1
                     continue
 
-                reasoning_content = (getattr(responses.choices[0].message,
-                                             'reasoning_content', '') or '')
-                content = responses.choices[0].message.content or ''
                 # Concat Reasoning Content and tags to content
                 if reasoning_content:
                     if self.verbose:

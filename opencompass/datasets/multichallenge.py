@@ -36,7 +36,7 @@ class MultiChallengeDataset(BaseDataset):
     """Load the data file from a pinned official GitHub commit."""
 
     @staticmethod
-    def load(path=MULTICHALLENGE_URL):
+    def load(path=MULTICHALLENGE_URL, mode=None):
         split = load_dataset('json', data_files=path, split='train')
         split = split.map(_format_multichallenge,
                           remove_columns=split.column_names)

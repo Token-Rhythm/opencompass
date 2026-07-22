@@ -5,6 +5,7 @@ from opencompass.openicl.icl_retriever import ZeroRetriever
 
 global_piqa_reader_cfg = dict(input_columns=['question_prompt'],
                               output_column='answer_letter',
+                              train_split='test',
                               test_split='test')
 global_piqa_infer_cfg = dict(
     prompt_template=dict(type=PromptTemplate, template='{question_prompt}'),

@@ -291,6 +291,32 @@ class TestOpenAISDK(unittest.TestCase):
     @patch('openai.OpenAI')
     @patch('httpx.Client')
     @patch.dict('os.environ', {'OPENAI_API_KEY': 'test-key'})
+    def test_generate_with_vllm_reasoning_field(self, mock_httpx_client,
+                                                mock_openai_class,
+                                                mock_tiktoken):
+        """Accept vLLM responses that expose reasoning instead of content."""
+        mock_tiktoken.encoding_for_model.return_value.encode.return_value = [
+            1, 2, 3
+        ]
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = None
+        mock_response.choices[0].message.reasoning_content = None
+        mock_response.choices[0].message.reasoning = 'Thinking process'
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = mock_response
+        mock_openai_class.return_value = mock_client
+        mock_httpx_client.return_value = MagicMock()
+
+        model = OpenAISDK(path='served-vllm-model', max_seq_len=16384)
+
+        self.assertEqual(model.generate(['Hello'], max_out_len=100),
+                         ['Thinking process'])
+
+    @patch('opencompass.models.openai_api.tiktoken', create=True)
+    @patch('openai.OpenAI')
+    @patch('httpx.Client')
+    @patch.dict('os.environ', {'OPENAI_API_KEY': 'test-key'})
     def test_generate_with_o1_model(self, mock_httpx_client, mock_openai_class,
                                     mock_tiktoken):
         """Test generate with O1 model (reasoning model)."""

@@ -1,6 +1,7 @@
 """Protocol tests for the phase-two benchmark adapters."""
 
 import csv
+import inspect
 import zipfile
 from pathlib import Path
 
@@ -9,13 +10,43 @@ from mmengine import Config
 
 from opencompass.datasets import aa_lcr as aa_lcr_module
 from opencompass.datasets.aa_lcr import AALCRDataset, _build_aa_lcr_prompt
-from opencompass.datasets.multichallenge import (_format_multichallenge,
+from opencompass.datasets.multichallenge import (MultiChallengeDataset,
+                                                 _format_multichallenge,
                                                  _score_multichallenge)
 from opencompass.datasets.polymath import (POLYMATH_ANSWER_INSTRUCTIONS,
                                            PolyMathEvaluator, _format_polymath,
                                            extract_first_boxed_content)
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+@pytest.mark.parametrize('relative_path,variable', [
+    ('polymath/polymath_0shot_gen.py', 'polymath_datasets'),
+    ('multichallenge/multichallenge_gen.py', 'multichallenge_datasets'),
+    ('aa_lcr/aa_lcr_gen.py', 'aa_lcr_datasets'),
+])
+def test_phase_two_configs_reference_existing_train_splits(
+        relative_path, variable):
+    config = Config.fromfile(ROOT / 'opencompass/configs/datasets' /
+                             relative_path)
+    assert all(dataset['reader_cfg']['train_split'] == 'test'
+               for dataset in config[variable])
+
+
+def test_single_score_dataset_loaders_accept_framework_mode():
+    assert 'mode' in inspect.signature(MultiChallengeDataset.load).parameters
+    assert 'mode' in inspect.signature(AALCRDataset.load).parameters
+
+
+def test_multichallenge_chat_config_passes_dialogue_without_stringifying():
+    config = Config.fromfile(ROOT /
+                             'opencompass/configs/datasets/multichallenge/'
+                             'multichallenge_gen.py')
+    dataset = config.multichallenge_datasets[0]
+
+    assert dataset['reader_cfg']['input_columns'] == ['dialogue']
+    assert dataset['infer_cfg']['ice_template']['template'] == ''
+    assert dataset['infer_cfg']['inferencer']['infer_mode'] == 'last'
 
 
 @pytest.mark.parametrize('relative_path,variable,count', [
@@ -66,9 +97,12 @@ def test_polymath_official_math_equality_cases():
         r'$-\pi \log_2$',
         '0',
     ])
-    assert result['accuracy'] == 80.0
+    # These expectations intentionally follow the official scorer's strict
+    # surface handling: it does not strip outer $ delimiters, and converting a
+    # non-pmatrix reference only recognizes the official ``{a,b}`` form.
+    assert result['accuracy'] == 40.0
     assert [detail['correct'] for detail in result['details']
-            ] == [True, True, True, True, False]
+            ] == [True, True, False, False, False]
 
 
 def test_multichallenge_conversation_and_official_axis_macro():

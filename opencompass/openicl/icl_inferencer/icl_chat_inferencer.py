@@ -145,7 +145,7 @@ class ChatInferencer(BaseInferencer):
         assert infer_mode in ['last', 'every', 'every_with_gt']
         self.infer_mode = infer_mode
         self.model: BaseModel
-        self._set_meta_template(self.model)
+        self._origin_template_parser = self.model.template_parser
 
         if self.model.is_api and save_every is None:
             save_every = 1
@@ -166,6 +166,21 @@ class ChatInferencer(BaseInferencer):
                   prompt_template: Optional[PromptTemplate] = None,
                   output_json_filepath: Optional[str] = None,
                   output_json_filename: Optional[str] = None) -> dict:
+        """Run chat inference without leaking its parser to later tasks."""
+        self.model.template_parser = self._origin_template_parser
+        self._set_meta_template(self.model)
+        try:
+            return self._inference(retriever, ice_template, prompt_template,
+                                   output_json_filepath, output_json_filename)
+        finally:
+            self.model.template_parser = self._origin_template_parser
+
+    def _inference(self,
+                   retriever: BaseRetriever,
+                   ice_template: Optional[PromptTemplate] = None,
+                   prompt_template: Optional[PromptTemplate] = None,
+                   output_json_filepath: Optional[str] = None,
+                   output_json_filename: Optional[str] = None) -> dict:
         # 1. Preparation for output logs
         output_handler = self.HandlerType()
 

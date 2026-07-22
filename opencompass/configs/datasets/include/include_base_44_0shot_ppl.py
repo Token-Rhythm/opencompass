@@ -1,6 +1,6 @@
 from opencompass.datasets import INCLUDEDataset
 from opencompass.openicl.icl_evaluator import AccEvaluator
-from opencompass.openicl.icl_inferencer import PPLInferencer
+from opencompass.openicl.icl_inferencer import LLInferencer
 from opencompass.openicl.icl_prompt_template import PromptTemplate
 from opencompass.openicl.icl_retriever import ZeroRetriever
 
@@ -17,6 +17,7 @@ include_datasets = []
 for lang in languages:
     reader_cfg = dict(input_columns=['prompt'],
                       output_column='answer',
+                      train_split='test',
                       test_split='test')
     infer_cfg = dict(prompt_template=dict(type=PromptTemplate,
                                           template={
@@ -26,7 +27,13 @@ for lang in languages:
                                               3: '{prompt} D',
                                           }),
                      retriever=dict(type=ZeroRetriever),
-                     inferencer=dict(type=PPLInferencer))
+                     inferencer=dict(type=LLInferencer,
+                                     continuations={
+                                         0: ' A',
+                                         1: ' B',
+                                         2: ' C',
+                                         3: ' D',
+                                     }))
     eval_cfg = dict(evaluator=dict(type=AccEvaluator))
     include_datasets.append(
         dict(abbr=f'include_base_44_{lang.lower().replace(" ", "_")}',

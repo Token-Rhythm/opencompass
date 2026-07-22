@@ -1,24 +1,20 @@
-"""Dependency-light port of QwenLM/PolyMath's ``math_equal`` routine.
+"""Port of QwenLM/PolyMath's official ``math_equal`` routine.
 
-The upstream implementation bundles a generated LaTeX parser. OpenCompass
-already requires SymPy's ANTLR parser for its math benchmarks, so this port
-keeps the upstream comparison order and tolerances while using that parser.
+The control flow and final LaTeX parsing fallback are fixed to
+QwenLM/PolyMath@fbf4e41cae78687d6be7447dbea897357c06aaa7.
 """
 
 import math
 import multiprocessing
 import re
 
-
-def _surface_form(value):
-    value = re.sub(r'\s+', '', str(value).strip())
-    if len(value) >= 2 and value.startswith('$') and value.endswith('$'):
-        value = value[1:-1]
-    return value
+import regex
 
 
 def _parse_number(value):
-    value = re.sub(',', '', _surface_form(value))
+    # Keep this deliberately narrow.  In particular, the official evaluator
+    # does not remove LaTeX delimiters or whitespace before parsing a number.
+    value = regex.sub(',', '', str(value))
     try:
         return float(value)
     except ValueError:
@@ -31,23 +27,17 @@ def _parse_number(value):
 
 
 def _choice_answer(value):
-    matches = re.findall(r'\b([A-E])\b', str(value).upper())
-    return matches[-1] if matches else str(value).strip().rstrip('./')
+    value = str(value).strip('\n').rstrip('.').rstrip('/').strip().lstrip(':')
+    matches = re.findall(r'\b([A-E])\b', value.upper())
+    value = matches[-1] if matches else value.strip().strip('.')
+    return value.rstrip('.').rstrip('/')
 
 
-def _matrix_rows(value):
-    begin = None
-    end = None
-    for matrix_type in ('pmatrix', 'bmatrix'):
-        candidate_begin = rf'\begin{{{matrix_type}}}'
-        candidate_end = rf'\end{{{matrix_type}}}'
-        if value.startswith(candidate_begin) and value.endswith(candidate_end):
-            begin, end = candidate_begin, candidate_end
-            break
-    if begin is None:
-        return None
-    return [[cell.strip() for cell in row.split('&')]
-            for row in value[len(begin):-len(end)].split(r'\\') if row.strip()]
+def _str_to_pmatrix(value):
+    matrices = re.findall(r'\{.*,.*\}', str(value).strip())
+    return ', '.join(r'\begin{pmatrix}' +
+                     matrix.strip('{}').replace(',', '\\') + r'\end{pmatrix}'
+                     for matrix in matrices)
 
 
 def _symbolic_equal(left, right):
@@ -55,16 +45,10 @@ def _symbolic_equal(left, right):
     from sympy.parsing.latex import parse_latex
     from sympy.parsing.sympy_parser import parse_expr
 
-    try:
-        from latex2sympy2_extended import latex2sympy
-    except ImportError:
-        latex2sympy = None
+    from .latex2sympy2.latex2sympy2 import latex2sympy
 
     def parse(value):
-        parsers = [parse_latex, parse_expr]
-        if latex2sympy is not None:
-            parsers.append(latex2sympy)
-        for parser in parsers:
+        for parser in (parse_latex, parse_expr, latex2sympy):
             try:
                 return parser(value.replace('\\\\', '\\'))
             except Exception:
@@ -130,13 +114,8 @@ def math_equal(prediction,
         return False
     if str(prediction).strip().lower() == str(reference).strip().lower():
         return True
-    # Box extraction removes spaces, while official references retain them and
-    # often include outer math delimiters.
-    if _surface_form(prediction).lower() == _surface_form(reference).lower():
-        return True
-    if str(reference).strip() in {
-            'A', 'B', 'C', 'D', 'E'
-    } and _choice_answer(prediction) == str(reference).strip():
+    if reference in {'A', 'B', 'C', 'D', 'E'
+                     } and _choice_answer(prediction) == reference:
         return True
 
     prediction_number = _parse_number(prediction)
@@ -155,6 +134,9 @@ def math_equal(prediction,
     if not prediction:
         return False
 
+    if 'pmatrix' in prediction and 'pmatrix' not in reference:
+        reference = _str_to_pmatrix(reference)
+
     pred_flat, ref_flat = prediction, reference
     if ((prediction.startswith('[') and prediction.endswith(']')
          and not reference.startswith('('))
@@ -168,8 +150,8 @@ def math_equal(prediction,
     if pred_flat.lower() == ref_flat.lower():
         return True
 
-    if (re.fullmatch(r'[\[(].+[\])]', prediction)
-            and re.fullmatch(r'[\[(].+[\])]', reference)):
+    if (regex.match(r'(\(|\[).+(\)|\])', prediction) is not None
+            and regex.match(r'(\(|\[).+(\)|\])', reference) is not None):
         pred_parts = prediction[1:-1].split(',')
         ref_parts = reference[1:-1].split(',')
         if len(pred_parts) == len(ref_parts) and all(
@@ -177,17 +159,39 @@ def math_equal(prediction,
                 for left, right in zip(pred_parts, ref_parts)):
             return True
 
-    pred_matrix = _matrix_rows(prediction)
-    ref_matrix = _matrix_rows(reference)
-    if pred_matrix is not None and ref_matrix is not None:
-        if (len(pred_matrix) == len(ref_matrix) and all(
-                len(left) == len(right)
-                for left, right in zip(pred_matrix, ref_matrix)) and all(
-                    math_equal(left_cell, right_cell, include_percentage,
-                               is_close)
-                    for left, right in zip(pred_matrix, ref_matrix)
-                    for left_cell, right_cell in zip(left, right))):
-            return True
+    if (((prediction.startswith(r'\begin{pmatrix}')
+          or prediction.startswith(r'\begin{bmatrix}')) and
+         (prediction.endswith(r'\end{pmatrix}')
+          or prediction.endswith(r'\end{bmatrix}')))
+            and ((reference.startswith(r'\begin{pmatrix}')
+                  or reference.startswith(r'\begin{bmatrix}')) and
+                 (reference.endswith(r'\end{pmatrix}')
+                  or reference.endswith(r'\end{bmatrix}')))):
+        pred_lines = [
+            line.strip()
+            for line in prediction[len(r'\begin{pmatrix}'
+                                       ):-len(r'\end{pmatrix}')].split(r'\\')
+            if line.strip()
+        ]
+        ref_lines = [
+            line.strip()
+            for line in reference[len(r'\begin{pmatrix}'
+                                      ):-len(r'\end{pmatrix}')].split(r'\\')
+            if line.strip()
+        ]
+        if len(pred_lines) == len(ref_lines):
+            matched = True
+            for pred_line, ref_line in zip(pred_lines, ref_lines):
+                pred_parts = pred_line.split('&')
+                ref_parts = ref_line.split('&')
+                if len(pred_parts) != len(ref_parts) or not all(
+                        math_equal(pred_parts[index], ref_parts[index],
+                                   include_percentage, is_close)
+                        for index in range(len(pred_parts))):
+                    matched = False
+                    break
+            if matched:
+                return True
 
     if prediction.count('=') == reference.count('=') == 1:
         pred_left, pred_right = prediction.split('=')

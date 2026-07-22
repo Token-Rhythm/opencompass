@@ -54,12 +54,12 @@ class ParallelChatInferencer(ChatInferencer):
         if self.progress_tracker is not None:
             self.progress_tracker.incr(count)
 
-    def inference(self,
-                  retriever: BaseRetriever,
-                  ice_template: Optional[PromptTemplate] = None,
-                  prompt_template: Optional[PromptTemplate] = None,
-                  output_json_filepath: Optional[str] = None,
-                  output_json_filename: Optional[str] = None) -> dict:
+    def _inference(self,
+                   retriever: BaseRetriever,
+                   ice_template: Optional[PromptTemplate] = None,
+                   prompt_template: Optional[PromptTemplate] = None,
+                   output_json_filepath: Optional[str] = None,
+                   output_json_filename: Optional[str] = None) -> dict:
         output_handler = self.HandlerType()
 
         if output_json_filepath is None:

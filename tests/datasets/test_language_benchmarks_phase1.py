@@ -33,6 +33,22 @@ def test_configs_load(relative_path, variable, count):
     assert len(config[variable]) == count
 
 
+@pytest.mark.parametrize('relative_path,variable,expected_train_split', [
+    ('mmlu_redux/mmlu_redux_gen.py', 'mmlu_redux_datasets', 'test'),
+    ('mmlu_prox/mmlu_prox_5shot_cot_gen.py', 'mmlu_prox_datasets',
+     'validation'),
+    ('global_piqa/global_piqa_generation.py', 'global_piqa_datasets', 'test'),
+    ('include/include_base_44_0shot_ppl.py', 'include_datasets', 'test'),
+    ('hmmt_2025/hmmt_2025_matharena_gen.py', 'hmmt_2025_datasets', 'test'),
+])
+def test_phase_one_configs_reference_existing_train_splits(
+        relative_path, variable, expected_train_split):
+    config = Config.fromfile(ROOT / 'opencompass/configs/datasets' /
+                             relative_path)
+    assert all(dataset['reader_cfg']['train_split'] == expected_train_split
+               for dataset in config[variable])
+
+
 def test_mmlu_prox_summarizer_matches_official_weighted_language_groups():
     config = Config.fromfile(ROOT /
                              'opencompass/configs/summarizers/mmlu_prox.py')
@@ -154,6 +170,21 @@ def test_include_and_hmmt_prompts_match_official_order():
     assert hmmt['prompt'] == (
         'Put your final answer within \\boxed{}.\n\nProblem text')
     assert hmmt['answer'] == '42'
+
+
+def test_include_uses_official_raw_continuation_loglikelihood():
+    config = Config.fromfile(ROOT / 'opencompass/configs/datasets/include/'
+                             'include_base_44_0shot_ppl.py')
+    inferencer = config.include_datasets[0]['infer_cfg']['inferencer']
+
+    assert config.include_datasets[0]['reader_cfg']['train_split'] == 'test'
+    assert inferencer['type'].__name__ == 'LLInferencer'
+    assert inferencer['continuations'] == {
+        0: ' A',
+        1: ' B',
+        2: ' C',
+        3: ' D',
+    }
 
 
 def test_hmmt_uses_matharena_non_strict_parser():

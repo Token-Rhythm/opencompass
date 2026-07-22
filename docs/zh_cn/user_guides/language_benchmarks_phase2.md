@@ -56,8 +56,10 @@ python run.py --models <model-config> --datasets aa_lcr_gen
 
 ## 依赖与缓存
 
-PolyMath 数学等价判分使用 OpenCompass extra requirements 中的 `sympy`、
-`antlr4-python3-runtime==4.11` 和 `latex2sympy2_extended`。如当前环境是最小安装：
+PolyMath 数学等价判分的控制流程以及最终 LaTeX parser 均固定自官方
+`QwenLM/PolyMath@fbf4e41cae78687d6be7447dbea897357c06aaa7`；生成的 parser 文件
+直接随适配代码提供。运行依赖 OpenCompass extra requirements 中的 `sympy` 和
+`antlr4-python3-runtime==4.11`。如当前环境是最小安装：
 
 ```bash
 uv pip install -r requirements/extra.txt

@@ -3,7 +3,7 @@
 """LogLikelihood(LL) Inferencer."""
 
 import os
-from typing import List, Optional
+from typing import Dict, List, Optional, Union
 
 import torch
 from tqdm import trange
@@ -43,6 +43,7 @@ class LLInferencer(BaseInferencer):
             output_json_filepath: Optional[str] = './icl_inference_output',
             output_json_filename: Optional[str] = 'predictions',
             labels: Optional[List] = None,
+            continuations: Optional[Union[List[str], Dict]] = None,
             **kwargs) -> None:
         super().__init__(
             model=model,
@@ -54,6 +55,7 @@ class LLInferencer(BaseInferencer):
         )
 
         self.labels = labels
+        self.continuations = continuations
 
     def inference(self,
                   retriever: BaseRetriever,
@@ -117,7 +119,13 @@ class LLInferencer(BaseInferencer):
 
                 prompt_list.append(prompt)
                 token_num_list.append(prompt_token_num)
-                cont_list.append(retriever.test_ds[idx]['cont'])
+                if self.continuations is None:
+                    continuation = retriever.test_ds[idx]['cont']
+                elif isinstance(self.continuations, dict):
+                    continuation = self.continuations[label]
+                else:
+                    continuation = self.continuations[labels.index(label)]
+                cont_list.append(continuation)
 
             # 5.2 Get loglikelihood
             logger.info(f"Calculating Loglikelihood for prompts labeled '{label}'")

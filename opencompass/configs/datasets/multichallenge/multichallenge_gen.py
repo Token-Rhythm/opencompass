@@ -41,34 +41,34 @@ multichallenge_judge_cfg = dict(
     batch_size=16,
     openai_extra_kwargs=dict(response_format=dict(
         type='json_schema',
-        json_schema=dict(
-            name='JudgeResponse',
-            strict=True,
-            schema=dict(
-                type='object',
-                properties=dict(
-                    reasoning=dict(type='string'),
-                    verdict=dict(type='string', enum=['YES', 'NO']),
-                ),
-                required=['reasoning', 'verdict'],
-                additionalProperties=False,
-            )))))
+        json_schema=dict(name='JudgeResponse',
+                         strict=True,
+                         schema=dict(
+                             type='object',
+                             properties=dict(
+                                 reasoning=dict(type='string'),
+                                 verdict=dict(type='string',
+                                              enum=['YES', 'NO']),
+                             ),
+                             required=['reasoning', 'verdict'],
+                             additionalProperties=False,
+                         )))))
 
-multichallenge_reader_cfg = dict(
-    input_columns=['dialogue', 'target_question'],
-    output_column='pass_criteria',
-    test_split='test')
-multichallenge_infer_cfg = dict(
-    retriever=dict(type=ZeroRetriever),
-    inferencer=dict(type=ChatInferencer,
-                    infer_mode='last',
-                    max_out_len=4096))
+multichallenge_reader_cfg = dict(input_columns=['dialogue'],
+                                 output_column='pass_criteria',
+                                 train_split='test',
+                                 test_split='test')
+multichallenge_infer_cfg = dict(ice_template=dict(type=PromptTemplate,
+                                                  template=''),
+                                retriever=dict(type=ZeroRetriever),
+                                inferencer=dict(type=ChatInferencer,
+                                                infer_mode='last',
+                                                max_out_len=4096))
 multichallenge_eval_cfg = dict(evaluator=dict(
     type=GenericLLMEvaluator,
     prompt_template=dict(type=PromptTemplate,
-                         template=dict(round=[
-                             dict(role='HUMAN', prompt=JUDGE_PROMPT)
-                         ])),
+                         template=dict(
+                             round=[dict(role='HUMAN', prompt=JUDGE_PROMPT)])),
     dataset_cfg=dict(type=MultiChallengeDataset,
                      reader_cfg=multichallenge_reader_cfg),
     judge_cfg=multichallenge_judge_cfg,
