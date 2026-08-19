@@ -1,10 +1,13 @@
 import os
 
+# flake8: noqa: E501 -- keep the official grader prompt byte-for-byte aligned.
+
 from opencompass.datasets import (AALCRDataset, generic_llmjudge_postprocess)
 from opencompass.evaluator import GenericLLMEvaluator
 from opencompass.models import OpenAISDK
 from opencompass.openicl.icl_inferencer import GenInferencer
 from opencompass.openicl.icl_prompt_template import PromptTemplate
+from opencompass.openicl.icl_raw_prompt_template import RawPromptTemplate
 from opencompass.openicl.icl_retriever import ZeroRetriever
 
 AA_LCR_GRADER = '''Assess whether the following CANDIDATE ANSWER is CORRECT or INCORRECT.
@@ -37,8 +40,8 @@ aa_lcr_reader_cfg = dict(input_columns=['prompt', 'question'],
                          output_column='answer',
                          train_split='test',
                          test_split='test')
-aa_lcr_infer_cfg = dict(prompt_template=dict(type=PromptTemplate,
-                                             template='{prompt}'),
+aa_lcr_infer_cfg = dict(prompt_template=dict(
+    type=RawPromptTemplate, messages=[dict(role='user', content='{prompt}')]),
                         retriever=dict(type=ZeroRetriever),
                         inferencer=dict(type=GenInferencer,
                                         max_seq_len=131072,

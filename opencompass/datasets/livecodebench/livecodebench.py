@@ -55,6 +55,7 @@ class LCBCodeGenerationDataset(BaseDataset):
     def load(path: str = 'opencompass/code_generation_lite',
              local_mode: bool = False,
              release_version: str = 'release_v1',
+             data_file: str = None,
              start_date: str = None,
              end_date: str = None):
 
@@ -100,13 +101,21 @@ class LCBCodeGenerationDataset(BaseDataset):
 
             return item
 
-        path = get_data_path(path, local_mode=local_mode)
-
-        dataset = load_dataset(
-            path,  # 'livecodebench/code_generation_lite'
-            split='test',
-            version_tag=release_version,
-            trust_remote_code=True)
+        if data_file is not None:
+            # Newer LiveCodeBench releases are published as plain JSONL files.
+            # Loading the pinned data file through the built-in JSON reader
+            # avoids executing the repository's remote dataset script and keeps
+            # inference and evaluation on exactly the same snapshot.
+            dataset = load_dataset('json',
+                                   data_files={'test': data_file},
+                                   split='test')
+        else:
+            path = get_data_path(path, local_mode=local_mode)
+            dataset = load_dataset(
+                path,  # 'livecodebench/code_generation_lite'
+                split='test',
+                version_tag=release_version,
+                trust_remote_code=True)
 
         dataset = dataset.map(transform)
 

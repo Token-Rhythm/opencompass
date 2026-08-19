@@ -108,7 +108,9 @@ class GPQASimpleEvalDataset(BaseDataset):
 
 @TEXT_POSTPROCESSORS.register_module()
 def GPQA_Simple_Eval_postprocess(text: str) -> str:
-    ANSWER_PATTERN = r'(?i)ANSWER\s*:\s*([A-D])'
+    # Keep this in sync with OpenAI simple-evals. In particular, the dollar
+    # sign shown in the requested ``Answer: $LETTER`` format is optional.
+    ANSWER_PATTERN = r'(?i)Answer[ \t]*:[ \t]*\$?([A-D])\$?'
     match = re.search(ANSWER_PATTERN, text)
     if match:
         return match.group(1)

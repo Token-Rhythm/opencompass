@@ -38,6 +38,12 @@ class BaseRunner:
         status = self.launch(tasks)
         status_list = list(status)  # change into list format
         self.summarize(status_list)
+        failed = [(task, code) for task, code in status_list if code != 0]
+        if failed:
+            details = ', '.join(f'{task} (code {code})'
+                                for task, code in failed)
+            raise RuntimeError(f'Runner tasks failed: {details}')
+        return status_list
 
     @abstractmethod
     def launch(self, tasks: List[Dict[str, Any]]) -> List[Tuple[str, int]]:

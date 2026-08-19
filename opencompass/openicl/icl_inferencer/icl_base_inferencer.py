@@ -104,6 +104,105 @@ def dump_results_dict(results_dict, filename):
         json.dump(results_dict, json_file, indent=4, ensure_ascii=False)
 
 
+def split_prediction_fields(prediction):
+    """Split structured model output into answer and reasoning fields.
+
+    Models traditionally return a string. Reasoning APIs may instead return
+    ``{'content': ..., 'reasoning_content': ...}``. The latter is normalized
+    here so inference files retain both fields while the legacy ``prediction``
+    field contains only the final answer.
+    """
+    if isinstance(prediction, dict) and ('content' in prediction
+                                         or 'reasoning_content' in prediction):
+        content = prediction.get('content', '')
+        reasoning_content = prediction.get('reasoning_content', '')
+        return (content if content is not None else '',
+                reasoning_content if reasoning_content is not None else '',
+                True)
+
+    if (isinstance(prediction, list) and prediction and all(
+            isinstance(item, dict) and
+        ('content' in item or 'reasoning_content' in item)
+            for item in prediction)):
+        contents = []
+        reasoning_contents = []
+        for item in prediction:
+            content = item.get('content', '')
+            reasoning_content = item.get('reasoning_content', '')
+            contents.append(content if content is not None else '')
+            reasoning_contents.append(
+                reasoning_content if reasoning_content is not None else '')
+        return contents, reasoning_contents, True
+
+    return prediction, None, False
+
+
+def prediction_content(prediction):
+    """Return only the final-answer content from a generated output."""
+    return split_prediction_fields(prediction)[0]
+
+
+def _next_jsonl_backup_path(path: Path) -> Path:
+    """Return a backup path without overwriting an earlier recovery file."""
+    backup = path.with_name(path.name + '.bak')
+    suffix = 1
+    while backup.exists():
+        backup = path.with_name(f'{path.name}.bak.{suffix}')
+        suffix += 1
+    return backup
+
+
+def _restore_results_from_jsonl(path: Path) -> dict:
+    """Load every intact JSONL record and quarantine malformed records.
+
+    A process can be interrupted while appending its final record.  The old
+    behavior moved the entire temporary file aside when *one* line was
+    malformed, which discarded all completed requests on resume.  Preserve
+    every independently valid row, keep the original bytes in a backup for
+    diagnosis, and rewrite a clean checkpoint containing only those rows.
+    Missing/corrupt rows are then naturally submitted again by the inferencer.
+    """
+    logger = get_logger()
+    result_dict = {}
+    invalid_lines = []
+    # Iterate over physical LF-delimited records. ``str.splitlines()`` also
+    # splits at Unicode separators such as U+0085 and U+2028, which are legal
+    # inside a JSON string and occur in some LongBench documents. Treating
+    # those characters as JSONL boundaries corrupts otherwise valid rows.
+    with path.open('r', encoding='utf-8', newline='') as json_file:
+        for line_number, line in enumerate(json_file, start=1):
+            if not line.strip():
+                continue
+            try:
+                item = json.loads(line)
+                if not isinstance(item, dict) or 'idx' not in item:
+                    raise ValueError('JSONL record must be an object with idx')
+                idx = item.pop('idx')
+                result_dict[idx] = item
+            except (json.JSONDecodeError, TypeError, ValueError):
+                invalid_lines.append(line_number)
+
+    if invalid_lines:
+        backup = _next_jsonl_backup_path(path)
+        shutil.move(path, backup)
+        if result_dict:
+            with path.open('x', encoding='utf-8') as json_file:
+                for idx, result in result_dict.items():
+                    json_file.write(
+                        json.dumps({
+                            'idx': idx,
+                            **result,
+                        }, ensure_ascii=False) + '\n')
+            logger.warning(
+                f'Recovered {len(result_dict)} valid entries from {path}; '
+                f'quarantined malformed lines {invalid_lines} in {backup}.')
+        else:
+            logger.warning(
+                f'No valid entries could be recovered from {path}; moved '
+                f'the original file to {backup}.')
+    return result_dict
+
+
 class GenInferencerOutputHandler:
     origin_prompt_dict = {}
     output_dict = {}
@@ -131,25 +230,11 @@ class GenInferencerOutputHandler:
                 json_file.write('\n'.join(new_lines) + '\n')
 
     def restore_from_jsonl(self, save_dir: str, filename: str) -> dict:
-        logger = get_logger()
-
         path = Path(save_dir) / filename
         if path.exists():
-            try:
-                result_dict = {}
-                for line in path.read_text().splitlines():
-                    if line.strip():
-                        item = json.loads(line)
-                        idx = item.pop('idx')
-                        result_dict[idx] = item
-            except Exception:
-                bak_file = path.with_name(path.name + '.bak')
-                shutil.move(path, bak_file)
-                logger.warning(f'Failed to load {path}, '
-                               f'move to {bak_file} to avoid error.')
-            else:
-                self.results_dict = result_dict
-                self.dumped_indices.update(result_dict.keys())
+            result_dict = _restore_results_from_jsonl(path)
+            self.results_dict = result_dict
+            self.dumped_indices.update(result_dict.keys())
         return self.results_dict
 
     def write_to_json(self, save_dir: str, filename: str):
@@ -162,17 +247,32 @@ class GenInferencerOutputHandler:
                      idx,
                      gold=None,
                      res_length=None,
-                     input_length=None):
+                     input_length=None,
+                     inference_error=None):
+        structured_error = (prediction.get('inference_error')
+                            if isinstance(prediction, dict) else None)
+        content, reasoning_content, is_structured = split_prediction_fields(
+            prediction)
         self.results_dict[str(idx)] = {
             'origin_prompt': origin_prompt,
-            'prediction': prediction,
+            # Keep prediction as a compatibility alias. It must never include
+            # reasoning, because existing evaluators consume this field.
+            'prediction': content,
         }
+        if is_structured:
+            self.results_dict[str(idx)]['content'] = content
+            self.results_dict[str(
+                idx)]['reasoning_content'] = reasoning_content
         if gold:
             self.results_dict[str(idx)]['gold'] = gold
         if res_length:
             self.results_dict[str(idx)]['res_length'] = res_length
         if input_length:
             self.results_dict[str(idx)]['all_input_length'] = input_length
+        inference_error = (inference_error
+                           if inference_error is not None else structured_error)
+        if inference_error is not None:
+            self.results_dict[str(idx)]['inference_error'] = inference_error
 
 
 class ChatOutputHandler:
@@ -198,25 +298,11 @@ class ChatOutputHandler:
                 json_file.write('\n'.join(new_lines) + '\n')
 
     def restore_from_jsonl(self, save_dir: str, filename: str) -> dict:
-        logger = get_logger()
-
         path = Path(save_dir) / filename
         if path.exists():
-            try:
-                result_dict = {}
-                for line in path.read_text().splitlines():
-                    if line.strip():
-                        item = json.loads(line)
-                        idx = item.pop('idx')
-                        result_dict[idx] = item
-            except Exception:
-                bak_file = path.with_name(path.name + '.bak')
-                shutil.move(path, bak_file)
-                logger.warning(f'Failed to load {path}, '
-                               f'move to {bak_file} to avoid error.')
-            else:
-                self.results_dict = result_dict
-                self.dumped_indices.update(result_dict.keys())
+            result_dict = _restore_results_from_jsonl(path)
+            self.results_dict = result_dict
+            self.dumped_indices.update(result_dict.keys())
         return self.results_dict
 
     def write_to_json(self, save_dir: str, filename: str):
@@ -231,10 +317,15 @@ class ChatOutputHandler:
         result_dict = {}
         if gold:
             result_dict['gold'] = gold
+        content, reasoning_content, is_structured = split_prediction_fields(
+            prediction)
         result_dict.update({
-            'prediction': prediction,
+            'prediction': content,
             'origin_prompt': origin_prompt,
         })
+        if is_structured:
+            result_dict['content'] = content
+            result_dict['reasoning_content'] = reasoning_content
         self.results_dict[str(idx)] = result_dict
 
     def save_multiround_results(self,
@@ -248,7 +339,13 @@ class ChatOutputHandler:
             'origin_prompt': [],
         })
         result_dict['gold'].append(gold)
-        result_dict['prediction'].append(prediction)
+        content, reasoning_content, is_structured = split_prediction_fields(
+            prediction)
+        result_dict['prediction'].append(content)
+        if is_structured:
+            result_dict.setdefault('content', []).append(content)
+            result_dict.setdefault('reasoning_content',
+                                   []).append(reasoning_content)
         result_dict['origin_prompt'].append(origin_prompt)
         self.results_dict[str(idx)] = result_dict
 

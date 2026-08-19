@@ -1,6 +1,6 @@
 from opencompass.datasets import PolyMathDataset, PolyMathEvaluator
 from opencompass.openicl.icl_inferencer import GenInferencer
-from opencompass.openicl.icl_prompt_template import PromptTemplate
+from opencompass.openicl.icl_raw_prompt_template import RawPromptTemplate
 from opencompass.openicl.icl_retriever import ZeroRetriever
 
 languages = ('en', 'zh', 'ar', 'bn', 'de', 'es', 'fr', 'id', 'it', 'ja', 'ko',
@@ -14,8 +14,9 @@ for lang in languages:
                           output_column='answer',
                           train_split='test',
                           test_split='test')
-        infer_cfg = dict(prompt_template=dict(type=PromptTemplate,
-                                              template='{prompt}'),
+        infer_cfg = dict(prompt_template=dict(
+            type=RawPromptTemplate,
+            messages=[dict(role='user', content='{prompt}')]),
                          retriever=dict(type=ZeroRetriever),
                          inferencer=dict(type=GenInferencer,
                                          max_seq_len=65536,

@@ -102,8 +102,9 @@ OpenCompass supports Python 3.12 for regular and full installation. If
 your evaluation depends on `pyext`-backed code execution datasets, use
 Python 3.10 instead: `pyext==0.7` is skipped on Python >=3.11 because it
 relies on `inspect.getargspec`, which was removed in Python 3.11.
-Without `pyext`, APPS (`apps`, `apps_mini`), TACO, and LiveCodeBench Code
-Generation are unavailable.
+Without `pyext`, APPS (`apps`, `apps_mini`) and TACO are unavailable.
+LiveCodeBench Code Generation uses a built-in Python module-compilation
+fallback on Python >=3.11.
 
 - #### Create your virtual environment
 

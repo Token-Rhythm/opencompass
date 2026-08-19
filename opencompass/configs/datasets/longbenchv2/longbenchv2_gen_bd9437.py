@@ -2,11 +2,13 @@ from opencompass.openicl.icl_prompt_template import PromptTemplate
 from opencompass.openicl.icl_retriever import ZeroRetriever
 from opencompass.openicl.icl_inferencer import GenInferencer
 from opencompass.datasets import LongBenchv2Dataset, LongBenchv2Evaluator
-from opencompass.utils.text_postprocessors import first_option_postprocess
+from opencompass.datasets.longbenchv2 import longbenchv2_answer_postprocess
 
 LongBenchv2_reader_cfg = dict(
     input_columns=['context', 'question', 'choice_A', 'choice_B', 'choice_C', 'choice_D', 'difficulty', 'length'],
     output_column='answer',
+    train_split='test',
+    test_split='test',
 )
 
 LongBenchv2_infer_cfg = dict(
@@ -28,14 +30,15 @@ LongBenchv2_infer_cfg = dict(
 LongBenchv2_eval_cfg = dict(
     evaluator=dict(type=LongBenchv2Evaluator),  
     pred_role='BOT',
-    pred_postprocessor=dict(type=first_option_postprocess, options='ABCD')  
+    pred_postprocessor=dict(type=longbenchv2_answer_postprocess)
 )
 
 LongBenchv2_datasets = [
     dict(
         type=LongBenchv2Dataset,
         abbr='LongBenchv2',
-        path='opencompass/longbenchv2',
+        path='zai-org/LongBench-v2',
+        hf_revision='2b48e494f2c7a2f0af81aae178e05c7e1dde0fe9',
         reader_cfg=LongBenchv2_reader_cfg,
         infer_cfg=LongBenchv2_infer_cfg,
         eval_cfg=LongBenchv2_eval_cfg,

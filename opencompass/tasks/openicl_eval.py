@@ -25,6 +25,16 @@ from opencompass.utils import (build_dataset_from_cfg, get_infer_output_path,
                                get_logger)
 
 
+def extract_prediction_content(pred):
+    """Extract final-answer content from one persisted prediction record."""
+    if 'content' in pred:
+        return pred['content']
+    prediction = pred.get('prediction')
+    if isinstance(prediction, dict) and 'content' in prediction:
+        return prediction['content']
+    return prediction
+
+
 @TASKS.register_module()
 class OpenICLEvalTask(BaseTask):
     """OpenICL Evaluation Task.
@@ -186,9 +196,12 @@ class OpenICLEvalTask(BaseTask):
                     break
 
         pred_dicts = copy.deepcopy(preds)
-        preds = {k: [pred.get(k) for pred in preds] for k in preds[0]}
 
-        pred_strs = preds.pop('prediction', None)
+        # Structured chat responses persist both reasoning and final answer.
+        # Evaluation must only consume ``content``. Fall back to prediction
+        # for legacy inference files and unwrap early structured files that
+        # may have stored the response under prediction.
+        pred_strs = [extract_prediction_content(pred) for pred in preds]
 
         return pred_dicts, pred_strs
 

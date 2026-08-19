@@ -14,6 +14,14 @@ HMMT_DATASETS = {
     ('MathArena/hmmt_nov_2025', '118dbfb45c4c9467c672268ed55166642897aa46'),
 }
 
+MATHARENA_2026_DATASETS = {
+    'aime_2026':
+    ('MathArena/aime_2026', 'd2de22f3c656b4f56cf8981212186377d1e23bc3'),
+    'hmmt_feb_2026':
+    ('MathArena/hmmt_feb_2026',
+     '02fba4f74d8e68e73e66a02d540fd979c05c274c'),
+}
+
 
 def _format_hmmt(row):
     return {
@@ -24,22 +32,53 @@ def _format_hmmt(row):
     }
 
 
+def _repeat_train_split(dataset, num_repeats):
+    if not isinstance(num_repeats, int) or isinstance(num_repeats, bool):
+        raise TypeError('num_repeats must be an integer')
+    if num_repeats < 1:
+        raise ValueError('num_repeats must be at least 1')
+    source = dataset['train']
+    indices = list(range(len(source))) * num_repeats
+    return source.select(indices)
+
+
 @LOAD_DATASET.register_module()
 class HMMT2025Dataset(BaseDataset):
 
     @staticmethod
-    def load(competition=None):
+    def load(competition=None, num_repeats=1):
         if competition not in HMMT_DATASETS:
             raise ValueError('competition must be either "feb" or "nov"')
         path, revision = HMMT_DATASETS[competition]
         dataset = load_dataset(path, revision=revision)
-        return DatasetDict({'test': dataset['train'].map(_format_hmmt)})
+        repeated = _repeat_train_split(dataset, num_repeats)
+        return DatasetDict({'test': repeated.map(_format_hmmt)})
+
+
+@LOAD_DATASET.register_module()
+class MathArena2026Dataset(BaseDataset):
+    """Load a pinned 2026 MathArena competition dataset."""
+
+    @staticmethod
+    def load(competition=None, num_repeats=1):
+        if competition not in MATHARENA_2026_DATASETS:
+            supported = ', '.join(sorted(MATHARENA_2026_DATASETS))
+            raise ValueError(
+                f'competition must be one of: {supported}')
+        path, revision = MATHARENA_2026_DATASETS[competition]
+        dataset = load_dataset(path, revision=revision)
+        repeated = _repeat_train_split(dataset, num_repeats)
+        return DatasetDict({'test': repeated.map(_format_hmmt)})
 
 
 class MathArenaEvaluator(BaseEvaluator):
     """Use the pinned official MathArena parser and answer checker."""
 
     def score(self, predictions, references):
+        if len(predictions) != len(references):
+            return {
+                'error': 'predictions and references have different lengths'
+            }
         try:
             from ._matharena import check_answers, extract_answer, parse_answer
         except ImportError as error:

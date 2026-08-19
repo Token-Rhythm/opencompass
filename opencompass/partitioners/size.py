@@ -216,6 +216,9 @@ class SizePartitioner(BasePartitioner):
         if isinstance(test_range, str):
             return len(eval(f'range(total_size){test_range}'))
 
+        if isinstance(test_range, list):
+            return len(test_range)
+
         return total_size
 
     def get_cost(self,

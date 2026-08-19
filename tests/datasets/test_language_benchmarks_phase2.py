@@ -16,6 +16,7 @@ from opencompass.datasets.multichallenge import (MultiChallengeDataset,
 from opencompass.datasets.polymath import (POLYMATH_ANSWER_INSTRUCTIONS,
                                            PolyMathEvaluator, _format_polymath,
                                            extract_first_boxed_content)
+from opencompass.openicl.icl_raw_prompt_template import RawPromptTemplate
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -150,7 +151,7 @@ def test_aa_lcr_prompt_uses_official_document_order():
     assert prompt.endswith('START QUESTION\n\nQuestion?\n\nEND QUESTION\n')
 
 
-def test_aa_lcr_loader_preserves_order_and_splits_answer_criteria(
+def test_aa_lcr_loader_preserves_order_and_reference_verbatim(
         tmp_path, monkeypatch):
     csv_path = tmp_path / 'AA-LCR_Dataset.csv'
     archive_path = tmp_path / 'AA-LCR_extracted-text.zip'
@@ -183,8 +184,21 @@ def test_aa_lcr_loader_preserves_order_and_splits_answer_criteria(
 
     monkeypatch.setattr(aa_lcr_module, 'hf_hub_download', fake_download)
     row = AALCRDataset.load()['test'][0]
-    assert row['answer'] == ['criterion one', 'criterion two']
+    assert row['answer'] == 'criterion one;criterion two'
     assert row['prompt'].index('BEGIN DOCUMENT 1:\nB') < row['prompt'].index(
         'BEGIN DOCUMENT 2:\nA')
     assert row['prompt'].index('BEGIN DOCUMENT 2:\nA') < row['prompt'].index(
         'BEGIN DOCUMENT 3:\nC')
+
+
+@pytest.mark.parametrize('relative_path,variable', [
+    ('polymath/polymath_0shot_gen.py', 'polymath_datasets'),
+    ('aa_lcr/aa_lcr_gen.py', 'aa_lcr_datasets'),
+])
+def test_phase_two_generation_configs_use_role_preserving_prompts(
+        relative_path, variable):
+    config = Config.fromfile(ROOT / 'opencompass/configs/datasets' /
+                             relative_path)
+    prompt_cfg = config[variable][0]['infer_cfg']['prompt_template']
+    assert prompt_cfg['type'] is RawPromptTemplate
+    assert prompt_cfg['messages'] == [dict(role='user', content='{prompt}')]

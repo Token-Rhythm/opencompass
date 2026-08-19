@@ -15,7 +15,7 @@ from opencompass.utils import batched
 from ..icl_prompt_template import PromptTemplate
 from ..icl_retriever import BaseRetriever
 from ..utils.logging import get_logger
-from .icl_base_inferencer import GenInferencerOutputHandler
+from .icl_base_inferencer import GenInferencerOutputHandler, prediction_content
 from .icl_gen_inferencer import GenInferencer
 
 logger = get_logger(__name__)
@@ -36,8 +36,14 @@ class ParallelGenInferencer(GenInferencer):
             output_json_filepath: Optional[str] = './icl_inference_output',
             output_json_filename: Optional[str] = 'predictions',
             save_every: Optional[int] = 1,
+            batch_size: Optional[int] = None,
             max_infer_workers: Optional[int] = None,
             **kwargs) -> None:
+        # OpenICLInferTask injects the model batch size into every inferencer.
+        # This inferencer schedules one request per worker, so consume that
+        # compatibility argument instead of forwarding a duplicate batch_size
+        # to GenInferencer.
+        del batch_size
         super().__init__(
             model=model,
             max_out_len=max_out_len,
@@ -132,9 +138,31 @@ class ParallelGenInferencer(GenInferencer):
         max_workers = self._resolve_max_workers()
 
         def _infer_one(entry, gold, idx):
-            parsed_entry = self.model.parse_template(entry, mode='gen')
-            generated = self.model.generate_from_template(
-                [entry], max_out_len=self.max_out_len, **extra_gen_kwargs)
+            parsed_entry = entry
+            try:
+                parsed_entry = self.model.parse_template(entry, mode='gen')
+                generated = self.model.generate_from_template(
+                    [entry], max_out_len=self.max_out_len, **extra_gen_kwargs)
+            except Exception as error:
+                # Let one exhausted API retry count as an incorrect sample,
+                # but do not let it abandon the result-persistence loop while
+                # ThreadPoolExecutor silently drains every queued request.
+                # Persisting the failure keeps the official denominator and
+                # makes the transport error auditable in the prediction file.
+                logger.exception(
+                    'Inference failed for sample %s; recording an empty '
+                    'prediction and continuing.', idx)
+                return dict(
+                    origin_prompt=parsed_entry,
+                    prediction={
+                        'reasoning_content': '',
+                        'content': '',
+                    },
+                    idx=idx,
+                    gold=gold,
+                    inference_error=(
+                        f'{type(error).__name__}: {error}'),
+                )
 
             if num_return_sequences == 1:
                 prediction = generated[0]
@@ -159,9 +187,7 @@ class ParallelGenInferencer(GenInferencer):
                                 parsed_entry[i]['prompt'])
                         input_length += parsed_entry[i]['input_length']
 
-                pred_str = copy.deepcopy(prediction)
-                if isinstance(pred_str, dict):
-                    pred_str = pred_str['prediction']
+                pred_str = prediction_content(copy.deepcopy(prediction))
 
                 if num_return_sequences == 1:
                     res_length = self.model.get_token_len(pred_str)
@@ -214,7 +240,11 @@ class ParallelGenInferencer(GenInferencer):
             with open(timer_filepath, 'a') as f:
                 f.write(json.dumps(time_dict) + '\n')
 
+        # Futures complete out of order.  Persisted evaluation reloads by
+        # numeric index, and direct callers must observe the same dataset
+        # order rather than completion order.
         return [
-            sample['prediction']
-            for sample in output_handler.results_dict.values()
+            sample['prediction'] for _, sample in sorted(
+                output_handler.results_dict.items(),
+                key=lambda item: int(item[0]))
         ]

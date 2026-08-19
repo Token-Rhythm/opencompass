@@ -50,6 +50,7 @@ class TestSizePartitioner(unittest.TestCase):
             ('[100:200]', 100),
             ('[::2]', 500),
             ('[:100][10:20]', 10),
+            ([1, 4, 9], 3),
         ]
 
         for test_range, expected_size in cases:
@@ -65,6 +66,7 @@ class TestSizePartitioner(unittest.TestCase):
             (100, (100, 20), 2000),
             (0.5, (500, 20), 10000),
             (0, (1000, 20), 20000),
+            ([1, 4, 9], (3, 20), 60),
         ]
 
         for test_range, raw_factors, expected_cost in cases:

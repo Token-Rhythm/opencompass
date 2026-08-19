@@ -1,4 +1,4 @@
-"""MMLU-ProX adapter matching its official five-shot CoT tasks."""
+"""MMLU-ProX adapter for the official full/lite and zero/five-shot tasks."""
 
 import re
 
@@ -12,6 +12,8 @@ from .mmlu_prox_lang_libs import LANG_LIBS, LANG_SUBJECTS
 
 MMLU_PROX_PATH = 'li-lab/MMLU-ProX'
 MMLU_PROX_REVISION = '8e6106a6c6ce1c5027e66cc338143cf997b2aa09'
+MMLU_PROX_LITE_PATH = 'li-lab/MMLU-ProX-Lite'
+MMLU_PROX_LITE_REVISION = 'e82aafb9460529687d3c7e51b401d8dd1dd309dd'
 MMLU_PROX_LANGUAGES = tuple(LANG_LIBS)
 MMLU_PROX_CATEGORIES = ('biology', 'business', 'chemistry', 'computer science',
                         'economics', 'engineering', 'health', 'history', 'law',
@@ -29,12 +31,19 @@ def _format_example(row, lang, category):
 
     cot = row['cot_content'].replace(strings[4], strings[2])
     suffix = strings[5].format('X')
-    subject = LANG_SUBJECTS[lang][category]
+    # The dataset labels this category with a space, while the official
+    # localization table uses identifier-style keys.
+    subject = LANG_SUBJECTS[lang][category.replace(' ', '_')]
     description = strings[3].format(subject=subject, ans_suffix=suffix)
     return {
         'language_config': lang,
         'description': description + '\n\n',
         'question_prompt': prompt + strings[2],
+        # Split fields preserve the official raw prompt when their contents
+        # are concatenated, while also giving chat endpoints proper
+        # user/assistant few-shot turns.
+        'fewshot_question_prompt': prompt,
+        'fewshot_answer_prompt': cot + '\n\n',
         'fewshot_prompt': prompt + cot + '\n\n',
         'answer_letter': row['answer'],
     }
@@ -75,6 +84,11 @@ class MMLUProXEvaluator(BaseEvaluator):
             re.IGNORECASE)
 
     def score(self, predictions, references, test_set):
+        if not (len(predictions) == len(references) == len(test_set)):
+            return {
+                'error': 'predictions, references, and test_set have '
+                'different lengths'
+            }
         details = []
         correct = 0
         for prediction, reference, row in zip(predictions, references,

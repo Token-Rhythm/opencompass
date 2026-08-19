@@ -17,6 +17,19 @@ import unittest
 from datasets import Dataset
 
 from opencompass.datasets.custom import CustomDataset
+from opencompass.configs.datasets.aime2025.aime2025_gen import (
+    aime2025_datasets,
+)
+from opencompass.openicl.icl_inferencer import ParallelGenInferencer
+
+
+def test_aime2025_uses_rolling_checkpoint_inference():
+    assert aime2025_datasets[0]['infer_cfg']['inferencer'] == {
+        'type': ParallelGenInferencer,
+        'save_every': 1,
+    }
+
+
 class CustomDataset:
     """Mock CustomDataset for testing when full import is not available."""
 

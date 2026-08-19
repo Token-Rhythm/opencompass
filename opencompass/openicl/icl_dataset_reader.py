@@ -42,14 +42,16 @@ class DatasetReader:
             specified index list (e.g. "[:100]" for the first 100 examples,
             "[100:200]" for the second 100 examples, etc.). Defaults to None.
         test_split (str): The name of the test split. Defaults to 'test'.
-        test_range (int or float or str, optional): The size of the partial
-            test dataset to load.
+        test_range (int, float, str, or list[int], optional): The size of the
+            partial test dataset to load.
             If None, the entire test dataset will be loaded.
             If int or float, the random partial dataset will be loaded with the
             specified size.
             If str, the partial dataset will be loaded with the
             specified index list (e.g. "[:100]" for the first 100 examples,
-            "[100:200]" for the second 100 examples, etc.). Defaults to None.
+            "[100:200]" for the second 100 examples, etc.). If a list of
+            integers, exactly those zero-based indices are selected in the
+            given order. Defaults to None.
     """
     dataset = None
     input_template = None
@@ -64,7 +66,8 @@ class DatasetReader:
                  train_split: str = 'train',
                  train_range: Optional[Union[int, float, str]] = None,
                  test_split: str = 'test',
-                 test_range: Optional[Union[int, float, str]] = None) -> None:
+                 test_range: Optional[Union[int, float, str,
+                                            List[int]]] = None) -> None:
         self.input_columns = _check_type_list(input_columns, [List, str])
         if isinstance(self.input_columns, str):
             self.input_columns = self.input_columns.split()
@@ -73,7 +76,8 @@ class DatasetReader:
             self.output_column = _check_str(output_column)
 
         train_range = _check_type_list(train_range, [None, int, float, str])
-        test_range = _check_type_list(test_range, [None, int, float, str])
+        test_range = _check_type_list(test_range,
+                                      [None, int, float, str, list])
 
         if input_template is not None:
             self.input_template = PromptTemplate._check_prompt_template(
@@ -217,7 +221,7 @@ class DatasetReader:
 
 def load_partial_dataset(
         dataset: Dataset,
-        size: Optional[Union[int, float, str]] = None) -> Dataset:
+        size: Optional[Union[int, float, str, List[int]]] = None) -> Dataset:
     """Load a partial dataset.
 
     Args:
@@ -225,9 +229,10 @@ def load_partial_dataset(
         size (int or float or (int, int), optional): The size of the partial
             dataset to load. If None, the entire dataset will be loaded.
             If int or float, the random partial dataset will be loaded with the
-            specified size. If str, the partial dataset will be loaded with the
-            specified index list (e.g. "[:100]" for the first 100 examples,
-            "[100:200]" for the second 100 examples, etc.). Defaults to None.
+        specified size. If str, the partial dataset will be loaded with the
+        specified index list (e.g. "[:100]" for the first 100 examples,
+        "[100:200]" for the second 100 examples, etc.). If a list of integers,
+        exactly those zero-based indices are selected. Defaults to None.
     """
     total_size = len(dataset)
     index_list = list(range(total_size))
@@ -241,6 +246,12 @@ def load_partial_dataset(
         dataset = dataset.select(index_list[:size])
     elif isinstance(size, str):
         dataset = dataset.select(eval(f'index_list{size}'))
+    elif isinstance(size, list):
+        if (any(not isinstance(index, int) for index in size)
+                or any(index < 0 or index >= total_size for index in size)):
+            raise ValueError('Explicit dataset indices must be integers in '
+                             f'[0, {total_size}).')
+        dataset = dataset.select(size)
     return dataset
 
 

@@ -310,6 +310,18 @@ class LMTemplateParser:
             str: The final string.
         """
         assert isinstance(prompt_template, (str, list, PromptList, tuple))
+
+        # RawPromptTemplate intentionally emits standard OpenAI messages
+        # instead of OpenCompass' legacy ``role``/``prompt`` representation.
+        # Keep a single message list intact; an outer list is still treated as
+        # a batch and recursively parsed below.
+        if (isinstance(prompt_template, (list, PromptList)) and prompt_template
+                and all(
+                    isinstance(item, dict)
+                    and item.get('role') in {'system', 'user', 'assistant'}
+                    and isinstance(item.get('content'), str)
+                    for item in prompt_template)):
+            return prompt_template
         if not isinstance(prompt_template, (str, PromptList)):
             return [self.parse_template(p, mode=mode) for p in prompt_template]
 

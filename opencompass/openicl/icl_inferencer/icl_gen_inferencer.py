@@ -19,7 +19,8 @@ from opencompass.utils import batched
 from ..icl_prompt_template import PromptTemplate
 from ..icl_retriever import BaseRetriever
 from ..utils.logging import get_logger
-from .icl_base_inferencer import BaseInferencer, GenInferencerOutputHandler
+from .icl_base_inferencer import (BaseInferencer, GenInferencerOutputHandler,
+                                  prediction_content)
 
 logger = get_logger(__name__)
 
@@ -119,17 +120,21 @@ class GenInferencer(BaseInferencer):
 
         # Create tmp json file for saving intermediate results and future
         # resuming
-        index = 0
         tmp_jsonl_filename = Path('tmp_' + output_json_filename).with_suffix(
             '.jsonl').name
         tmp_jsonl_filepath = Path(output_json_filepath) / tmp_jsonl_filename
         tmp_result_dict = output_handler.restore_from_jsonl(
             output_json_filepath, tmp_jsonl_filename)
-        index = len(tmp_result_dict)
+        total_samples = len(prompt_list)
+        todo = [
+            index for index in range(total_samples)
+            if str(index) not in tmp_result_dict
+        ]
 
         # 4. Wrap prompts with Dataloader
         logger.info('Starting build dataloader')
-        dataloader = self.get_dataloader(prompt_list[index:], self.batch_size)
+        dataloader = self.get_dataloader([prompt_list[index] for index in todo],
+                                         self.batch_size)
 
         # 5. Inference for prompts in each batch
         logger.info('Starting inference process...')
@@ -137,7 +142,11 @@ class GenInferencer(BaseInferencer):
         start_time_stamp = time.time()
         num_sample = 0
         first_dump = True
+        completed = total_samples - len(todo)
+        todo_cursor = 0
         for datum in tqdm(dataloader, disable=not self.is_main_process):
+            batch_indices = todo[todo_cursor:todo_cursor + len(datum)]
+            todo_cursor += len(datum)
             if ds_reader.output_column:
                 entry, golds = list(zip(*datum))
             else:
@@ -183,9 +192,9 @@ class GenInferencer(BaseInferencer):
             num_return_sequences = getattr(self.model, 'generation_kwargs',
                                            {}).get('num_return_sequences', 1)
             # 5-3. Save current output
-            for prompt, prediction, gold in zip(
-                    parsed_entries, batched(generated, num_return_sequences),
-                    golds):
+            for index, prompt, prediction, gold in zip(
+                    batch_indices, parsed_entries,
+                    batched(generated, num_return_sequences), golds):
                 if num_return_sequences == 1:
                     prediction = prediction[0]
 
@@ -208,9 +217,7 @@ class GenInferencer(BaseInferencer):
                                     'Cannot find prompt field in the message!')
                             input_length += prompt[i]['input_length']
 
-                    pred_str = copy.deepcopy(prediction)
-                    if isinstance(pred_str, dict):
-                        pred_str = pred_str['prediction']
+                    pred_str = prediction_content(copy.deepcopy(prediction))
 
                     if num_return_sequences == 1:
                         res_length = self.model.get_token_len(pred_str)
@@ -229,10 +236,11 @@ class GenInferencer(BaseInferencer):
                                                 prediction,
                                                 index,
                                                 gold=gold)
-                index = index + 1
+                completed += 1
 
             # 5-4. Save intermediate results
-            if (self.save_every is not None and index % self.save_every == 0
+            if (self.save_every is not None
+                    and completed % self.save_every == 0
                     and self.is_main_process):
                 output_handler.write_to_jsonl(output_json_filepath,
                                               tmp_jsonl_filename)
@@ -264,8 +272,8 @@ class GenInferencer(BaseInferencer):
                 f.write(json.dumps(time_dict) + '\n')
 
         return [
-            sample['prediction']
-            for sample in output_handler.results_dict.values()
+            output_handler.results_dict[str(index)]['prediction']
+            for index in range(total_samples)
         ]
 
     def get_generation_prompt_list_from_retriever_indices(

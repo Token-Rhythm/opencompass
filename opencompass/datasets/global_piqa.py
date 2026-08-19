@@ -52,7 +52,12 @@ class GlobalPIQADataset(BaseDataset):
     """Load every official language config from both benchmark variants."""
 
     @staticmethod
-    def load(sources=GLOBAL_PIQA_SOURCES):
+    def load(sources=GLOBAL_PIQA_SOURCES, samples_per_config=None):
+        if (samples_per_config is not None
+                and (not isinstance(samples_per_config, int)
+                     or isinstance(samples_per_config, bool)
+                     or samples_per_config <= 0)):
+            raise ValueError('samples_per_config must be a positive integer')
         subsets = []
         for variant, (path, revision) in sources.items():
             configs = get_dataset_config_names(path, revision=revision)
@@ -61,6 +66,9 @@ class GlobalPIQADataset(BaseDataset):
                                      language,
                                      revision=revision,
                                      split='test')
+                if samples_per_config is not None:
+                    split = split.select(
+                        range(min(samples_per_config, len(split))))
                 split = split.map(lambda row, v=variant, lang=language:
                                   _format_global_piqa(row, v, lang))
                 split = split.select_columns([
@@ -88,6 +96,11 @@ class GlobalPIQAEvaluator(BaseEvaluator):
     }
 
     def score(self, predictions, references, test_set):
+        if not (len(predictions) == len(references) == len(test_set)):
+            return {
+                'error': 'predictions, references, and test_set have '
+                'different lengths'
+            }
         by_language = defaultdict(list)
         details = []
         for prediction, reference, row in zip(predictions, references,

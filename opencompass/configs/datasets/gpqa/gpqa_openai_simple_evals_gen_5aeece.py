@@ -1,11 +1,12 @@
 from opencompass.openicl.icl_prompt_template import PromptTemplate
 from opencompass.openicl.icl_retriever import ZeroRetriever
-from opencompass.openicl.icl_inferencer import GenInferencer
-from opencompass.datasets import GPQADataset, GPQA_Simple_Eval_postprocess, GPQAEvaluator
+from opencompass.openicl.icl_inferencer import ParallelGenInferencer
+from opencompass.datasets import (GPQAEvaluator, GPQASimpleEvalDataset,
+                                  GPQA_Simple_Eval_postprocess)
 
 # openai_simple_eval prompt
 align_prompt = """
-Answer the following multiple choice question. The last line of your response should be of the following format: 'ANSWER: $LETTER' (without quotes) where LETTER is one of ABCD. Think step by step before answering.
+Answer the following multiple choice question. The last line of your response should be of the following format: 'Answer: $LETTER' (without quotes) where LETTER is one of ABCD. Think step by step before answering.
 
 {question}
 
@@ -27,7 +28,9 @@ gpqa_infer_cfg = dict(
                 dict(role='HUMAN', prompt=align_prompt),
             ], )),
     retriever=dict(type=ZeroRetriever),
-    inferencer=dict(type=GenInferencer))
+    # Four shuffled passes plus long reasoning make fixed batches vulnerable
+    # to tail latency.  Keep 64 requests rolling and persist each completion.
+    inferencer=dict(type=ParallelGenInferencer, save_every=1))
 
 gpqa_eval_cfg = dict(evaluator=dict(type=GPQAEvaluator),
                      pred_postprocessor=dict(type=GPQA_Simple_Eval_postprocess))
@@ -43,7 +46,7 @@ for split in list(gpqa_subsets.keys()):
     gpqa_datasets.append(
         dict(
             abbr='GPQA_' + split,
-            type=GPQADataset,
+            type=GPQASimpleEvalDataset,
             path='./data/gpqa/',
             name=gpqa_subsets[split],
             reader_cfg=gpqa_reader_cfg,

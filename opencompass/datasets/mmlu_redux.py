@@ -13,6 +13,9 @@ from .base import BaseDataset
 MMLU_REDUX_PATH = 'edinburgh-dawg/mmlu-redux-2.0'
 MMLU_REDUX_REVISION = '372ea425445d51e1ba1188c56e5e893f8138621f'
 CHOICES = 'ABCD'
+MMLU_REDUX_DESCRIPTION = (
+    'The following are multiple choice questions (with answers) about '
+    '{subject}.\n\n')
 MMLU_REDUX_CATEGORIES = {
     'humanities':
     ('formal_logic', 'high_school_european_history', 'high_school_us_history',
@@ -46,6 +49,11 @@ SUBJECT_TO_CATEGORY = {
     for category, subjects in MMLU_REDUX_CATEGORIES.items()
     for subject in subjects
 }
+
+
+def _mmlu_redux_description(subject):
+    """Return lm-eval's per-subject MMLU-Redux task description."""
+    return MMLU_REDUX_DESCRIPTION.format(subject=subject.replace('_', ' '))
 
 
 def _format_mmlu_redux(row):
@@ -82,11 +90,16 @@ class MMLUReduxDataset(BaseDataset):
             split = split.map(
                 lambda row, current=name: {
                     **_format_mmlu_redux(row),
-                    'subject': current,
-                    'category': SUBJECT_TO_CATEGORY[current],
+                    'description':
+                    _mmlu_redux_description(current),
+                    'subject':
+                    current,
+                    'category':
+                    SUBJECT_TO_CATEGORY[current],
                 })
-            split = split.select_columns(
-                ['prompt', 'answer_letter', 'subject', 'category'])
+            split = split.select_columns([
+                'description', 'prompt', 'answer_letter', 'subject', 'category'
+            ])
             subsets.append(split)
         return DatasetDict({'test': concatenate_datasets(subsets)})
 

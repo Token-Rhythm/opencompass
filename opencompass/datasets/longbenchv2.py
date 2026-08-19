@@ -1,4 +1,6 @@
-from datasets import Dataset, load_dataset
+import re
+
+from datasets import Dataset, DatasetDict, load_dataset
 
 from opencompass.openicl.icl_evaluator import BaseEvaluator
 from opencompass.registry import ICL_EVALUATORS, LOAD_DATASET
@@ -11,7 +13,13 @@ from .base import BaseDataset
 class LongBenchv2Dataset(BaseDataset):
 
     @staticmethod
-    def load(path: str):
+    def load(path: str, hf_revision=None):
+        if hf_revision is not None:
+            source = load_dataset(path,
+                                  split='train',
+                                  revision=hf_revision)
+            return DatasetDict({'test': source})
+
         path = get_data_path(path)
         dataset = load_dataset('json', data_files=path)
 
@@ -49,6 +57,11 @@ class LongBenchv2Evaluator(BaseEvaluator):
         super().__init__()
 
     def score(self, predictions, references, test_set):
+        if not (len(predictions) == len(references) == len(test_set)):
+            return {
+                'error': 'predictions, references, and test_set have '
+                'different lengths'
+            }
         if not test_set:
             raise ValueError('test set is empty')
 
@@ -121,3 +134,13 @@ class LongBenchv2Evaluator(BaseEvaluator):
                 results[f'accuracy_{length}'] = acc
 
         return results
+
+
+def longbenchv2_answer_postprocess(response: str) -> str:
+    """Extract an answer using the official LongBench v2 patterns."""
+    response = str(response).replace('*', '')
+    match = re.search(r'The correct answer is \(([A-D])\)', response)
+    if match:
+        return match.group(1)
+    match = re.search(r'The correct answer is ([A-D])', response)
+    return match.group(1) if match else ''

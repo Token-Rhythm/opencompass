@@ -47,6 +47,7 @@ def codegen_check_correctness(sample, generation, timeout, debug=True):
            len(json.loads(sample['input_output'])['inputs']) + 5)
     if p.is_alive():
         p.kill()
+        p.join()
     if not result:
         in_outs = json.loads(sample['input_output'])
         # consider that all tests failed
@@ -54,7 +55,11 @@ def codegen_check_correctness(sample, generation, timeout, debug=True):
         if debug:
             logger = get_logger()
             logger.info('global timeout')
-    return result[0], metadata_list[0]
+    # A forcibly terminated worker cannot append its metadata.  The execution
+    # result already records a timeout for every test case, so return empty
+    # metadata instead of raising IndexError and aborting the whole benchmark.
+    metadata = metadata_list[0] if metadata_list else {}
+    return result[0], metadata
 
 
 def evaluate_generations_by_problem(problem_generations: list, sample: list,
@@ -237,6 +242,7 @@ class LCBCodeGenerationEvaluator(BaseEvaluator):
                  timeout=6,
                  release_version='release_v1',
                  extractor_version='v1',
+                 data_file=None,
                  start_date=None,
                  end_date=None):
         super().__init__()
@@ -244,6 +250,7 @@ class LCBCodeGenerationEvaluator(BaseEvaluator):
         self.timeout = timeout
         self.dataset = LCBCodeGenerationDataset.load(
             release_version=release_version,
+            data_file=data_file,
             start_date=start_date,
             end_date=end_date)['test']
         self.extractor_version = extractor_version

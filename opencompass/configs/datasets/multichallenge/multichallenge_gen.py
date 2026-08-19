@@ -30,7 +30,8 @@ api_meta_template = dict(round=[
 multichallenge_judge_cfg = dict(
     abbr='gpt-4o-2024-08-06',
     type=OpenAISDK,
-    path='gpt-4o-2024-08-06',
+    path=os.environ.get('MULTICHALLENGE_JUDGE_MODEL',
+                        'gpt-4o-2024-08-06'),
     key='ENV',
     openai_api_base=os.environ.get('OPENAI_BASE_URL',
                                    'https://api.openai.com/v1/'),

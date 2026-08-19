@@ -135,7 +135,7 @@ class OpenAI(BaseAPIModel):
             retry=retry,
             verbose=verbose,
         )
-        assert mode in ['none', 'front', 'mid', 'rear']
+        assert mode in ['none', 'front', 'mid', 'rear', 'token_mid']
         self.path = path
         self.temperature = temperature
         self.mode = mode
@@ -208,7 +208,7 @@ class OpenAI(BaseAPIModel):
         max_out_len: int = 512,
         temperature: float = 0.7,
         **kwargs,
-    ) -> List[str]:
+    ) -> List[Union[str, Dict[str, str]]]:
         """Generate results given a list of inputs.
 
         Args:
@@ -222,7 +222,10 @@ class OpenAI(BaseAPIModel):
                 focused and deterministic. Defaults to 0.7.
 
         Returns:
-            List[str]: A list of generated strings.
+            List[Union[str, Dict[str, str]]]: A list of generated outputs.
+            Chat responses contain separate ``reasoning_content`` and
+            ``content`` fields so that reasoning can be persisted without
+            being included in benchmark answer matching.
         """
         if self.temperature is not None:
             temperature = self.temperature
@@ -246,7 +249,7 @@ class OpenAI(BaseAPIModel):
         return results
 
     def _generate(self, input: PromptType, max_out_len: int,
-                  temperature: float) -> str:
+                  temperature: float) -> Union[str, Dict[str, str]]:
         """Generate results given a list of inputs.
 
         Args:
@@ -260,7 +263,9 @@ class OpenAI(BaseAPIModel):
                 focused and deterministic.
 
         Returns:
-            str: The generated string.
+            Union[str, Dict[str, str]]: The generated output. Non-logprob chat
+            responses contain separate ``reasoning_content`` and ``content``
+            fields.
         """
         assert isinstance(input, (str, PromptList))
 
@@ -356,28 +361,17 @@ class OpenAI(BaseAPIModel):
                 if self.logprobs:
                     return response['choices']
                 else:
-                    # Extract content and reasoning_content from response
+                    # Keep the answer and the reasoning separate. Joining the
+                    # two makes answer extractors match tokens from the chain
+                    # of thought instead of the final answer.
                     message = response['choices'][0]['message']
                     content = message.get('content', '') or ''
                     reasoning_content = message.get('reasoning_content',
                                                     '') or ''
-
-                    # Handle reasoning_content similar to OpenAISDK
-                    if reasoning_content:
-                        if self.verbose:
-                            self.logger.info(
-                                'Extracting reasoning content and tags.'
-                                'Reasoning Content: %s, \n'
-                                'Tags: %s, \n'
-                                'Content: %s', reasoning_content,
-                                self.think_tag, content)
-
-                        if content:
-                            return reasoning_content + self.think_tag + content
-                        else:
-                            return reasoning_content
-                    else:
-                        return content.strip()
+                    return {
+                        'reasoning_content': reasoning_content,
+                        'content': content.strip(),
+                    }
             except requests.ConnectionError:
                 self.logger.error('Got connection error, retrying...')
             except requests.JSONDecodeError:
@@ -486,6 +480,45 @@ class OpenAI(BaseAPIModel):
         Returns:
             str: The trimmed prompt.
         """
+        if mode == 'token_mid':
+            if self.tokenizer_type == 'tiktoken':
+                input_ids = self.tokenizer.encode(prompt,
+                                                  disallowed_special=())
+                decode_kwargs = {}
+            elif self.tokenizer_type == 'hf':
+                input_ids = self.tokenizer.encode(prompt,
+                                                  add_special_tokens=False)
+                decode_kwargs = {'skip_special_tokens': True}
+            else:
+                raise RuntimeError('No tokenizer available for token-level '
+                                   'truncation.')
+            if len(input_ids) <= num_token:
+                return prompt
+            head_size = num_token // 2
+            tail_size = head_size
+            while True:
+                kept_ids = input_ids[:head_size]
+                if tail_size:
+                    kept_ids += input_ids[-tail_size:]
+                trimmed_prompt = self.tokenizer.decode(kept_ids,
+                                                       **decode_kwargs)
+                # Decoding and re-tokenizing BPE/SentencePiece IDs is not
+                # guaranteed to be length preserving at the new middle
+                # boundary. Enforce the budget on the text that will
+                # actually be sent so the reserved generation allowance is
+                # never reduced by an off-by-one re-tokenization expansion.
+                overflow = self.get_token_len(trimmed_prompt) - num_token
+                if overflow <= 0:
+                    return trimmed_prompt
+                previous_sizes = (head_size, tail_size)
+                for _ in range(overflow):
+                    if head_size >= tail_size and head_size:
+                        head_size -= 1
+                    elif tail_size:
+                        tail_size -= 1
+                if (head_size, tail_size) == previous_sizes:
+                    return trimmed_prompt
+
         token_len = self.get_token_len(prompt)
         if token_len <= num_token:
             return prompt
@@ -700,26 +733,31 @@ class OpenAISDK(OpenAI):
 
         return OpenAI(base_url=self.openai_api_base,
                       api_key=current_key,
-                      http_client=http_client)
+                      http_client=http_client,
+                      max_retries=0)
 
     def _generate(
         self,
         input: PromptList | str,
         max_out_len: int,
         temperature: float,
+        stopping_criteria: Optional[List[str]] = None,
         # timeout: int = 3600,
-    ) -> str:
+    ) -> Dict[str, str]:
         """Generate results given a list of inputs.
 
         Args:
             input (PromptType): A string or PromptDict.
             max_out_len (int): The maximum length of the output.
             temperature (float): What sampling temperature to use.
+            stopping_criteria (List[str], optional): Stop sequences sent to
+                the OpenAI-compatible endpoint.
             timeout (int, optional): Timeout in seconds for the API call.
                 Defaults to 3600 (60 minutes).
 
         Returns:
-            str: The generated string.
+            Dict[str, str]: The generated output with separate
+            ``reasoning_content`` and ``content`` fields.
         """
         from openai import APIStatusError, BadRequestError
         assert isinstance(input, (str, list, PromptList))
@@ -747,10 +785,13 @@ class OpenAISDK(OpenAI):
                     model=self.path,
                     max_tokens=max_out_len,
                     n=1,
-                    temperature=self.temperature,
+                    temperature=temperature,
                     messages=messages,
                     extra_body=self.extra_body,
                 )
+
+            if stopping_criteria:
+                query_data['stop'] = stopping_criteria
 
             if self.openai_extra_kwargs:
                 query_data.update(self.openai_extra_kwargs)
@@ -792,13 +833,13 @@ class OpenAISDK(OpenAI):
                             'Server does not return any content '
                             'and stop reason is <stop>, '
                             'the input query is: %s', query_data)
-                        return ''
+                        return {'reasoning_content': '', 'content': ''}
                     if finish_reason == 'content_filter':
                         self.logger.info(
                             'The answer for this question is filtered,'
                             'the stop reason is <content_filter>, '
                             'the input query is: %s', query_data)
-                        return ''
+                        return {'reasoning_content': '', 'content': ''}
                     self.logger.error(
                         'Failed to extract content from the responses. '
                         'Please check the API response for detail information.'
@@ -808,27 +849,20 @@ class OpenAISDK(OpenAI):
                     num_retries += 1
                     continue
 
-                # Concat Reasoning Content and tags to content
                 if reasoning_content:
                     if self.verbose:
                         self.logger.info(
-                            'Follow'
-                            'vllm/reasoning/deepseek_r1_reasoning_parser'
-                            'to parse the reasoning content and tags'
+                            'Keeping reasoning content separate from the '
+                            'final answer. '
                             'Reasoning Content: %s, \n'
-                            'Tags: %s, \n'
                             'Content: %s',
                             reasoning_content,
-                            self.think_tag,
                             content,
                         )
-                    if content:
-                        return reasoning_content + self.think_tag + content
-                    else:
-                        return reasoning_content
-
-                else:
-                    return content
+                return {
+                    'reasoning_content': reasoning_content,
+                    'content': content,
+                }
 
             except (BadRequestError, APIStatusError) as e:
                 # Handle BadRequest status
@@ -845,7 +879,10 @@ class OpenAISDK(OpenAI):
                     self.logger.info(f'Status Code: {status_code}, \n'
                                      f'Original Error Message: {e}, \n'
                                      f'Return Message: {error_message} ')
-                    return error_message
+                    return {
+                        'reasoning_content': '',
+                        'content': error_message,
+                    }
                 else:
                     self.logger.error(
                         f'error occurs at {self.openai_api_base}')

@@ -26,7 +26,8 @@ ifbench_datasets = [
     dict(
         abbr='IFBench',
         type=IFEvalDataset,
-        path='opencompass/IFbench',
+        path='allenai/IFBench_test',
+        hf_revision='2e8a48de45ff3bf41242f927254ca81b59ca3ae2',
         reader_cfg=ifbench_reader_cfg,
         infer_cfg=ifbench_infer_cfg,
         eval_cfg=ifbench_eval_cfg)

@@ -1,10 +1,12 @@
 """vLLM OpenAI-compatible API model with continuation scoring."""
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
-from typing import Dict, List, Optional, Tuple
+from time import sleep
+from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
+from tqdm import tqdm
 
 from opencompass.registry import MODELS
 
@@ -28,6 +30,8 @@ class VLLMOpenAIAPI(OpenAISDK):
                  *args,
                  generation_endpoint: str = 'chat',
                  completion_extra_body: Optional[Dict] = None,
+                 stream_chat: bool = False,
+                 stream_idle_timeout: Optional[float] = None,
                  **kwargs):
         super().__init__(*args, **kwargs)
         if generation_endpoint not in {'chat', 'completions'}:
@@ -35,23 +39,101 @@ class VLLMOpenAIAPI(OpenAISDK):
                              '"completions"')
         self.generation_endpoint = generation_endpoint
         self.completion_extra_body = completion_extra_body or {}
+        self.stream_chat = stream_chat
+        self.stream_idle_timeout = stream_idle_timeout
         self._prompt_token_ids_cache: Dict[str, Tuple[int, ...]] = {}
         self._prompt_token_ids_cache_lock = Lock()
 
-    def _generate(self, input, max_out_len: int, temperature: float) -> str:
+    def generate(self,
+                 inputs,
+                 max_out_len: int = 512,
+                 temperature: float = 0.7,
+                 stopping_criteria: Optional[List[str]] = None,
+                 **kwargs) -> List[Union[str, Dict[str, str]]]:
+        """Generate while forwarding dataset-specific stop sequences."""
+        if self.temperature is not None:
+            temperature = self.temperature
+        stops = stopping_criteria or None
+
+        def failed_prediction(error: Exception) -> Dict[str, str]:
+            self.logger.exception(
+                'Generation failed after all retries; recording an empty '
+                'prediction so the remaining batch can continue.')
+            return {
+                'reasoning_content': '',
+                'content': '',
+                'inference_error': f'{type(error).__name__}: {error}',
+            }
+
+        if len(inputs) == 1:
+            try:
+                result = self._generate(inputs[0], max_out_len, temperature,
+                                        stops)
+            except Exception as error:
+                result = failed_prediction(error)
+            return [result]
+
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            futures = {
+                executor.submit(self._generate, input, max_out_len,
+                                temperature, stops): index
+                for index, input in enumerate(inputs)
+            }
+            results = [None] * len(inputs)
+            for future in tqdm(as_completed(futures),
+                               total=len(inputs),
+                               desc='Inferencing'):
+                try:
+                    result = future.result()
+                except Exception as error:
+                    result = failed_prediction(error)
+                results[futures[future]] = result
+            return results
+
+    def _generate(
+        self,
+        input,
+        max_out_len: int,
+        temperature: float,
+        stopping_criteria: Optional[List[str]] = None
+    ) -> Union[str, Dict[str, str]]:
         """Generate with chat or raw completions as explicitly configured."""
         if self.generation_endpoint == 'chat':
-            return super()._generate(input, max_out_len, temperature)
-        if not isinstance(input, str):
-            raise TypeError('Raw /v1/completions generation requires a string '
-                            'prompt and no chat meta template.')
+            if getattr(self, 'stream_chat', False):
+                return self._generate_chat_stream(input, max_out_len,
+                                                  temperature,
+                                                  stopping_criteria)
+            return super()._generate(input, max_out_len, temperature,
+                                     stopping_criteria)
+        if isinstance(input, str):
+            prompt = input
+        elif isinstance(input, list) and all(
+                isinstance(message, dict)
+                and message.get('role') in {'system', 'user', 'assistant'}
+                and isinstance(message.get('content'), str)
+                for message in input):
+            if getattr(self, 'meta_template', None) is not None:
+                raise ValueError(
+                    'Raw /v1/completions generation with structured messages '
+                    'requires meta_template=None.')
+            # lm-evaluation-harness renders its internal messages as plain
+            # text by concatenating only their contents when chat templating
+            # is disabled. Preserve the same behavior for benchmark configs
+            # that also support /v1/chat/completions.
+            prompt = ''.join(message['content'] for message in input)
+        else:
+            raise TypeError(
+                'Raw /v1/completions generation requires either a string '
+                'prompt or OpenAI-format messages with role/content fields.')
 
         query_data = dict(model=self.path,
-                          prompt=input,
+                          prompt=prompt,
                           max_tokens=max_out_len,
                           n=1,
                           temperature=temperature,
                           extra_body=self.extra_body)
+        if stopping_criteria:
+            query_data['stop'] = stopping_criteria
         if self.openai_extra_kwargs:
             query_data.update(self.openai_extra_kwargs)
 
@@ -81,6 +163,135 @@ class VLLMOpenAIAPI(OpenAISDK):
             finally:
                 self.release()
         raise RuntimeError('vLLM raw completions request failed')
+
+    def _generate_chat_stream(
+        self,
+        input,
+        max_out_len: int,
+        temperature: float,
+        stopping_criteria: Optional[List[str]] = None
+    ) -> Dict[str, str]:
+        """Stream a chat response while keeping reasoning and answer apart.
+
+        Large thinking responses can finish in the vLLM engine before the
+        non-streaming HTTP layer has serialized and buffered the complete JSON
+        response. Reading chunks as they are produced avoids that response
+        pile-up. It also preserves the same public result shape as
+        :class:`OpenAISDK`, so evaluators only score the final ``content`` and
+        never accidentally score private reasoning.
+        """
+        from openai import APITimeoutError, APIStatusError, BadRequestError
+
+        messages, max_out_len = self._preprocess_messages(
+            input, max_out_len, self.max_seq_len, self.mode,
+            self.get_token_len)
+        query_data = dict(model=self.path,
+                          max_tokens=max_out_len,
+                          n=1,
+                          temperature=temperature,
+                          messages=messages,
+                          extra_body=self.extra_body)
+        if stopping_criteria:
+            query_data['stop'] = stopping_criteria
+        if self.openai_extra_kwargs:
+            query_data.update(self.openai_extra_kwargs)
+        # This is a transport choice, not a sampling option. Do not allow an
+        # overlapping extra kwarg to silently disable it.
+        query_data['stream'] = True
+
+        for attempt in range(self.retry):
+            response_stream = None
+            content_chunks = []
+            reasoning_chunks = []
+            finish_reason = None
+            self.acquire()
+            try:
+                response_stream = self.openai_client.chat.completions.create(
+                    **query_data,
+                    timeout=(self.stream_idle_timeout
+                             if self.stream_idle_timeout is not None else
+                             self.timeout))
+                for chunk in response_stream:
+                    choices = getattr(chunk, 'choices', None)
+                    if not choices:
+                        continue
+                    choice = choices[0]
+                    delta = getattr(choice, 'delta', None)
+                    if delta is not None:
+                        content = getattr(delta, 'content', '') or ''
+                        reasoning_content = (
+                            getattr(delta, 'reasoning_content', '') or '')
+                        reasoning = getattr(delta, 'reasoning', '') or ''
+                        if content:
+                            content_chunks.append(content)
+                        if reasoning_content or reasoning:
+                            reasoning_chunks.append(reasoning_content
+                                                    or reasoning)
+                    if getattr(choice, 'finish_reason', None) is not None:
+                        finish_reason = choice.finish_reason
+
+                if finish_reason is None:
+                    raise RuntimeError(
+                        'vLLM streaming response ended without finish_reason')
+                content = ''.join(content_chunks)
+                reasoning_content = ''.join(reasoning_chunks)
+                if not content and not reasoning_content:
+                    if finish_reason in {'stop', 'content_filter'}:
+                        return {'reasoning_content': '', 'content': ''}
+                    raise RuntimeError(
+                        'vLLM streaming response contains no text')
+                return {
+                    'reasoning_content': reasoning_content,
+                    'content': content,
+                }
+            except APITimeoutError as error:
+                # A proxy can occasionally forward every generated SSE chunk
+                # but omit the terminal event, leaving the OpenAI iterator
+                # blocked even though vLLM has already marked the request as
+                # finished.  Once text has arrived, preserve it as the
+                # length-limited response instead of discarding a costly
+                # long-context generation and retrying the whole request.
+                if content_chunks or reasoning_chunks:
+                    self.logger.warning(
+                        'vLLM streaming chat response became idle after '
+                        'receiving text but before a terminal event; '
+                        'preserving the received response: %s', error)
+                    return {
+                        'reasoning_content': ''.join(reasoning_chunks),
+                        'content': ''.join(content_chunks),
+                    }
+                self.logger.error('vLLM streaming chat request timed out '
+                                  f'(attempt {attempt + 1}/{self.retry}): '
+                                  f'{error}')
+                if attempt + 1 == self.retry:
+                    raise
+            except (BadRequestError, APIStatusError) as error:
+                status_code = error.status_code
+                if (status_code is not None
+                        and status_code in self.status_code_mappings):
+                    return {
+                        'reasoning_content': '',
+                        'content': self.status_code_mappings[status_code],
+                    }
+                self.logger.error('vLLM streaming chat request failed '
+                                  f'(attempt {attempt + 1}/{self.retry}): '
+                                  f'{error}')
+                if attempt + 1 == self.retry:
+                    raise
+            except Exception as error:
+                self.logger.error('vLLM streaming chat request failed '
+                                  f'(attempt {attempt + 1}/{self.retry}): '
+                                  f'{error}')
+                if attempt + 1 == self.retry:
+                    raise
+            finally:
+                if response_stream is not None:
+                    try:
+                        response_stream.close()
+                    except Exception:
+                        pass
+                self.release()
+        raise RuntimeError('vLLM streaming chat request failed')
 
     @staticmethod
     def _response_dict(response) -> Dict:
@@ -153,6 +364,13 @@ class VLLMOpenAIAPI(OpenAISDK):
                                   f'{error}')
                 if attempt + 1 == self.retry:
                     raise
+                # A reverse proxy can briefly close many concurrent raw
+                # completions connections at once.  Retrying immediately
+                # makes every worker hit the same outage window and can burn
+                # through the full retry budget within one second.  Keep the
+                # delay short for normal transient failures, but back off
+                # enough for the endpoint to recover.
+                sleep(min(0.25 * (2**attempt), 4.0))
             finally:
                 self.release()
         raise RuntimeError('vLLM completions request failed')

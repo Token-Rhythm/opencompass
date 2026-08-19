@@ -11,6 +11,11 @@
 | MultiChallenge | `ekwinox117/multi-challenge@5ccefcca6a39020d66c1383c4e6a809cb07afa33` | `multichallenge_gen` | 保留完整多轮历史；官方 judge prompt；`gpt-4o-2024-08-06`、temperature 0、结构化 YES/NO；先算四个 axis，再做宏平均 |
 | AA-LCR | `ArtificialAnalysis/AA-LCR@bdae010bbce259820c0e34c1d7cce210d966fb75` | `aa_lcr_gen` | 100 道长上下文题；按 CSV 中的文件顺序拼接文档；官方 prompt 与 equality-checker prompt；官方 Qwen3 judge |
 
+PolyMath 和 AA-LCR 的生成 prompt 均使用结构化的单条 user message，message content 是
+完整官方 prompt（题面、答案指令或输入文档边界都包含在内），不是只传 question。
+`VLLMOpenAIAPI` 走 raw completions 时只连接 message content，因此不会改变原始 prompt；
+走 chat completions 时则保留 user role。
+
 PolyMath 主榜分数可使用：
 
 ```bash
@@ -53,6 +58,9 @@ python run.py --models <model-config> --datasets aa_lcr_gen
   必须保持不变，否则结果不能与官网直接比较。
 - AA-LCR 的每条输入平均约 100k token。被测模型和 judge 服务都必须支持至少 131072
   token；不应通过截断来跑出一个看似完整的分数。
+- 官网方法对 AA-LCR 的 100 题运行 3 次再报告 pass@1；单次 OpenCompass 配置给出一轮
+  100 题的 pass@1。严格复现官网展示值时应从外层运行三次，而不是在 loader 中复制样本
+  （否则确定性服务可能产生三份相同响应）。
 
 ## 依赖与缓存
 

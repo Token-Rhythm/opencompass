@@ -440,12 +440,12 @@ DATASETS_MAPPING = {
     "opencompass/aime2026": {
         "ms_id": "",
         "hf_id": "",
-        "local": "./data/aime2026/aime2026.jsonl",
+        "local": "./data/aime2026.jsonl",
     },
     "opencompass/hmmt2026": {
         "ms_id": "",
         "hf_id": "",
-        "local": "./data/hmmt2026/hmmt_feb_2026.jsonl",
+        "local": "./data/hmmt_feb_2026.jsonl",
     },
     "opencompass/cmo_fib": {
         "ms_id": "",

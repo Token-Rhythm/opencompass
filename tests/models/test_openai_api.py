@@ -2,7 +2,7 @@
 
 import sys
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 from opencompass.models.openai_api import OpenAI, OpenAISDK
 
@@ -81,7 +81,10 @@ class TestOpenAI(unittest.TestCase):
         results = model.generate(['Hello'], max_out_len=100)
 
         self.assertEqual(len(results), 1)
-        self.assertEqual(results[0], 'Generated response')
+        self.assertEqual(results[0], {
+            'reasoning_content': '',
+            'content': 'Generated response'
+        })
         mock_requests.post.assert_called()
 
     @patch('opencompass.models.openai_api.tiktoken', create=True)
@@ -98,6 +101,53 @@ class TestOpenAI(unittest.TestCase):
         token_len = model.get_token_len('Hello')
 
         self.assertEqual(token_len, 5)
+
+    def test_token_mid_truncation_matches_longbench_protocol(self):
+        model = object.__new__(OpenAI)
+        model.tokenizer_type = 'tiktoken'
+        model.tokenizer = MagicMock()
+        model.tokenizer.encode.return_value = list(range(10))
+        model.tokenizer.decode.side_effect = (
+            lambda token_ids: ','.join(map(str, token_ids)))
+        model.get_token_len = MagicMock(return_value=6)
+
+        result = model._bin_trim('untrimmed prompt', 6, 'token_mid')
+
+        self.assertEqual(result, '0,1,2,7,8,9')
+        model.tokenizer.encode.assert_called_once_with(
+            'untrimmed prompt', disallowed_special=())
+
+    def test_token_mid_truncation_uses_hf_decode_contract(self):
+        model = object.__new__(OpenAI)
+        model.tokenizer_type = 'hf'
+        model.tokenizer = MagicMock()
+        model.tokenizer.encode.return_value = list(range(9))
+        model.tokenizer.decode.return_value = 'trimmed prompt'
+
+        result = model._bin_trim('untrimmed prompt', 4, 'token_mid')
+
+        self.assertEqual(result, 'trimmed prompt')
+        model.tokenizer.encode.assert_called_once_with(
+            'untrimmed prompt', add_special_tokens=False)
+        model.tokenizer.decode.assert_called_once_with(
+            [0, 1, 7, 8], skip_special_tokens=True)
+
+    def test_token_mid_rechecks_decoded_text_budget(self):
+        model = object.__new__(OpenAI)
+        model.tokenizer_type = 'hf'
+        model.tokenizer = MagicMock()
+        model.tokenizer.encode.return_value = list(range(10))
+        model.tokenizer.decode.side_effect = ['expanded prompt',
+                                              'within budget']
+        model.get_token_len = MagicMock(side_effect=[7, 6])
+
+        result = model._bin_trim('untrimmed prompt', 6, 'token_mid')
+
+        self.assertEqual(result, 'within budget')
+        self.assertEqual(model.tokenizer.decode.call_args_list, [
+            call([0, 1, 2, 7, 8, 9], skip_special_tokens=True),
+            call([0, 1, 7, 8, 9], skip_special_tokens=True),
+        ])
 
     @patch('opencompass.models.openai_api.tiktoken', create=True)
     @patch('opencompass.models.openai_api.requests')
@@ -130,7 +180,10 @@ class TestOpenAI(unittest.TestCase):
         results = model.generate(['Hello'], max_out_len=100)
 
         self.assertEqual(len(results), 1)
-        self.assertEqual(results[0], 'Thinking process</think>Final answer')
+        self.assertEqual(results[0], {
+            'reasoning_content': 'Thinking process',
+            'content': 'Final answer'
+        })
 
     @patch('opencompass.models.openai_api.tiktoken', create=True)
     @patch('opencompass.models.openai_api.requests')
@@ -166,7 +219,10 @@ class TestOpenAI(unittest.TestCase):
         results = model.generate(['Hello'], max_out_len=100)
 
         self.assertEqual(len(results), 1)
-        self.assertEqual(results[0], 'Generated response')
+        self.assertEqual(results[0], {
+            'reasoning_content': '',
+            'content': 'Generated response'
+        })
         self.assertEqual(mock_requests.post.call_count, 2)
 
 
@@ -194,35 +250,45 @@ class TestOpenAISDK(unittest.TestCase):
         self.assertEqual(model.path, 'gpt-3.5-turbo')
         self.assertEqual(model.max_seq_len, 16384)
         self.assertEqual(model.openai_client, mock_client)
+        mock_openai_class.assert_called_once_with(
+            base_url='https://api.openai.com/v1/',
+            api_key='test-key',
+            http_client=mock_httpx_client.return_value,
+            max_retries=0,
+        )
 
     @patch('opencompass.models.openai_api.inspect.signature')
     @patch('opencompass.models.openai_api.tiktoken', create=True)
     @patch('openai.OpenAI')
     @patch('httpx.Client')
     @patch.dict('os.environ', {'OPENAI_API_KEY': 'test-key'})
-    def test_proxy_config_is_passed_to_http_client(
-            self, mock_httpx_client, mock_openai_class, mock_tiktoken,
-            mock_signature):
+    def test_proxy_config_is_passed_to_http_client(self, mock_httpx_client,
+                                                   mock_openai_class,
+                                                   mock_tiktoken,
+                                                   mock_signature):
         """Test OpenAISDK proxy configuration with modern httpx."""
         mock_enc = MagicMock()
         mock_tiktoken.encoding_for_model.return_value = mock_enc
         mock_openai_class.return_value = MagicMock()
         mock_httpx_client.return_value = MagicMock()
-        mock_signature.return_value = type(
-            'Signature', (), {'parameters': {'proxy': object()}})()
+        mock_signature.return_value = type('Signature', (),
+                                           {'parameters': {
+                                               'proxy': object()
+                                           }})()
 
         OpenAISDK(
             path='gpt-3.5-turbo',
             openai_proxy_url='http://proxy.example',
             http_client_cfg={
                 'proxy': 'http://old-proxy.example',
-                'proxies': {'http://': 'http://old-proxy.example'},
+                'proxies': {
+                    'http://': 'http://old-proxy.example'
+                },
             },
         )
 
         http_client_kwargs = mock_httpx_client.call_args[1]
-        self.assertEqual(http_client_kwargs['proxy'],
-                         'http://proxy.example')
+        self.assertEqual(http_client_kwargs['proxy'], 'http://proxy.example')
         self.assertNotIn('proxies', http_client_kwargs)
 
     @patch('opencompass.models.openai_api.tiktoken', create=True)
@@ -253,7 +319,10 @@ class TestOpenAISDK(unittest.TestCase):
         results = model.generate(['Hello'], max_out_len=100)
 
         self.assertEqual(len(results), 1)
-        self.assertEqual(results[0], 'Generated response')
+        self.assertEqual(results[0], {
+            'reasoning_content': '',
+            'content': 'Generated response'
+        })
         mock_client.chat.completions.create.assert_called()
 
     @patch('opencompass.models.openai_api.tiktoken', create=True)
@@ -285,7 +354,10 @@ class TestOpenAISDK(unittest.TestCase):
         results = model.generate(['Hello'], max_out_len=100)
 
         self.assertEqual(len(results), 1)
-        self.assertEqual(results[0], 'Thinking process</think>Final answer')
+        self.assertEqual(results[0], {
+            'reasoning_content': 'Thinking process',
+            'content': 'Final answer'
+        })
 
     @patch('opencompass.models.openai_api.tiktoken', create=True)
     @patch('openai.OpenAI')
@@ -311,7 +383,10 @@ class TestOpenAISDK(unittest.TestCase):
         model = OpenAISDK(path='served-vllm-model', max_seq_len=16384)
 
         self.assertEqual(model.generate(['Hello'], max_out_len=100),
-                         ['Thinking process'])
+                         [{
+                             'reasoning_content': 'Thinking process',
+                             'content': ''
+                         }])
 
     @patch('opencompass.models.openai_api.tiktoken', create=True)
     @patch('openai.OpenAI')
@@ -389,7 +464,10 @@ class TestOpenAISDK(unittest.TestCase):
         results = model.generate(['Hello'], max_out_len=100)
 
         self.assertEqual(len(results), 1)
-        self.assertEqual(results[0], 'Generated response')
+        self.assertEqual(results[0], {
+            'reasoning_content': '',
+            'content': 'Generated response'
+        })
         self.assertEqual(mock_client.chat.completions.create.call_count, 2)
 
 

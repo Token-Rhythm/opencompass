@@ -2,8 +2,7 @@ from opencompass.openicl.icl_prompt_template import PromptTemplate
 from opencompass.openicl.icl_retriever import FixKRetriever
 from opencompass.openicl.icl_inferencer import GenInferencer
 from opencompass.openicl.icl_evaluator import AccEvaluator
-from opencompass.datasets import CEvalDataset
-from opencompass.utils.text_postprocessors import first_capital_postprocess
+from opencompass.datasets.ceval import CEvalDataset, ceval_answer_postprocess
 
 
 ceval_subject_mapping = {
@@ -87,7 +86,7 @@ for _split in ['val']:
 
         ceval_eval_cfg = dict(
             evaluator=dict(type=AccEvaluator),
-            pred_postprocessor=dict(type=first_capital_postprocess))
+            pred_postprocessor=dict(type=ceval_answer_postprocess))
 
         ceval_datasets.append(
             dict(

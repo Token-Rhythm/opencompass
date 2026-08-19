@@ -127,7 +127,11 @@ class NumWorkerPartitioner(BasePartitioner):
             cfg = copy.deepcopy(dataset_cfg)
             cfg['abbr'] = abbr + f'_{part}'
             test_range = cfg['reader_cfg'].get('test_range', '')
-            cfg['reader_cfg']['test_range'] = f'{test_range}[{i}:{i+step}]'
+            if isinstance(test_range, list):
+                cfg['reader_cfg']['test_range'] = test_range[i:i + step]
+            else:
+                cfg['reader_cfg']['test_range'] = (
+                    f'{test_range}[{i}:{i+step}]')
             split_configs.append(cfg)
         return split_configs
 
@@ -137,8 +141,12 @@ class NumWorkerPartitioner(BasePartitioner):
 
         # If not forcing rebuild and data exists in cache, use the cache
         if not self.force_rebuild and dataset_abbr in self.dataset_size:
-            actual_size = eval('len(range(self.dataset_size[dataset_abbr])'
-                               f'{test_range})')
+            if isinstance(test_range, list):
+                actual_size = len(test_range)
+            else:
+                actual_size = eval(
+                    'len(range(self.dataset_size[dataset_abbr])'
+                    f'{test_range})')
             return actual_size
 
         # Otherwise, rebuild the dataset to get its size
@@ -153,6 +161,9 @@ class NumWorkerPartitioner(BasePartitioner):
                           indent=4,
                           ensure_ascii=False)
 
-        actual_size = eval('len(range(self.dataset_size[dataset_abbr])'
-                           f'{test_range})')
+        if isinstance(test_range, list):
+            actual_size = len(test_range)
+        else:
+            actual_size = eval('len(range(self.dataset_size[dataset_abbr])'
+                               f'{test_range})')
         return actual_size

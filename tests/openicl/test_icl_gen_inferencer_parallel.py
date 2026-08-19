@@ -1,7 +1,9 @@
 """Unit tests for ParallelGenInferencer."""
 
+import json
 import os
 import tempfile
+import time
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -33,6 +35,16 @@ class TestParallelGenInferencer(unittest.TestCase):
         self.assertEqual(inferencer.max_infer_workers, 4)
         self.assertIsNone(inferencer.progress_tracker)
         self.assertEqual(inferencer.max_out_len, 512)
+
+    def test_initialization_ignores_injected_batch_size(self):
+        """Standard OpenICL tasks inject a model batch size."""
+        inferencer = ParallelGenInferencer(model=self.mock_model,
+                                           max_out_len=512,
+                                           batch_size=128,
+                                           max_infer_workers=4)
+
+        self.assertEqual(inferencer.batch_size, 1)
+        self.assertEqual(inferencer.max_infer_workers, 4)
 
     def test_initialization_defaults(self):
         """Test initialization with default values."""
@@ -156,6 +168,63 @@ class TestParallelGenInferencer(unittest.TestCase):
         self.assertIsInstance(result, list)
         mock_retriever.retrieve.assert_called_once()
 
+    def test_inference_returns_dataset_order_after_out_of_order_completion(self):
+        def generate(entries, **kwargs):
+            prompt = entries[0]
+            if prompt == 'slow-first':
+                time.sleep(0.05)
+            return [prompt]
+
+        self.mock_model.generate_from_template.side_effect = generate
+        inferencer = ParallelGenInferencer(
+            model=self.mock_model,
+            max_out_len=512,
+            max_infer_workers=2,
+            output_json_filepath=self.temp_dir,
+            output_json_filename='ordered.json',
+        )
+        mock_retriever = MagicMock()
+        mock_retriever.retrieve.return_value = [[], []]
+        mock_retriever.dataset_reader.output_column = None
+        inferencer.get_generation_prompt_list_from_retriever_indices = (
+            MagicMock(return_value=['slow-first', 'fast-second']))
+
+        result = inferencer.inference(mock_retriever)
+
+        self.assertEqual(result, ['slow-first', 'fast-second'])
+
+    def test_inference_persists_failed_sample_and_continues(self):
+        def generate(entries, **kwargs):
+            if entries[0] == 'bad-first':
+                raise TimeoutError('stream timed out')
+            return ['good-second']
+
+        self.mock_model.generate_from_template.side_effect = generate
+        inferencer = ParallelGenInferencer(
+            model=self.mock_model,
+            max_out_len=512,
+            max_infer_workers=2,
+            output_json_filepath=self.temp_dir,
+            output_json_filename='with_error.json',
+        )
+        mock_retriever = MagicMock()
+        mock_retriever.retrieve.return_value = [[], []]
+        mock_retriever.dataset_reader.output_column = None
+        inferencer.get_generation_prompt_list_from_retriever_indices = (
+            MagicMock(return_value=['bad-first', 'good-second']))
+
+        result = inferencer.inference(mock_retriever)
+
+        with open(os.path.join(self.temp_dir, 'with_error.json'),
+                  encoding='utf-8') as file:
+            persisted = json.load(file)
+        self.assertEqual(result, ['', 'good-second'])
+        self.assertEqual(persisted['0']['prediction'], '')
+        self.assertEqual(persisted['0']['content'], '')
+        self.assertIn('TimeoutError: stream timed out',
+                      persisted['0']['inference_error'])
+        self.assertEqual(persisted['1']['prediction'], 'good-second')
+
     @patch(
         'opencompass.openicl.icl_inferencer.icl_gen_inferencer_parallel.os.path.exists'  # noqa
     )
@@ -190,6 +259,37 @@ class TestParallelGenInferencer(unittest.TestCase):
 
         # Verify tracker was used
         mock_tracker.set_total.assert_called_once_with(2)
+
+    def test_inference_persists_reasoning_and_returns_only_content(self):
+        self.mock_model.generate_from_template.return_value = [{
+            'reasoning_content':
+            'reasoning says A before correcting itself',
+            'content':
+            'B',
+        }]
+        inferencer = ParallelGenInferencer(
+            model=self.mock_model,
+            max_out_len=512,
+            max_infer_workers=1,
+            output_json_filepath=self.temp_dir,
+            output_json_filename='structured.json',
+        )
+        mock_retriever = MagicMock()
+        mock_retriever.retrieve.return_value = [[]]
+        mock_retriever.dataset_reader.output_column = None
+        inferencer.get_generation_prompt_list_from_retriever_indices = (
+            MagicMock(return_value=['prompt']))
+
+        result = inferencer.inference(mock_retriever)
+
+        with open(os.path.join(self.temp_dir, 'structured.json'),
+                  encoding='utf-8') as file:
+            persisted = json.load(file)['0']
+        self.assertEqual(result, ['B'])
+        self.assertEqual(persisted['prediction'], 'B')
+        self.assertEqual(persisted['content'], 'B')
+        self.assertEqual(persisted['reasoning_content'],
+                         'reasoning says A before correcting itself')
 
     @patch(
         'opencompass.openicl.icl_inferencer.icl_gen_inferencer_parallel.GenInferencerOutputHandler'  # noqa

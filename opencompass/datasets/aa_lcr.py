@@ -85,11 +85,11 @@ class AALCRDataset(BaseDataset):
                     raw['question_id'],
                     'question':
                     raw['question'],
-                    # The official loader treats semicolon-separated entries
-                    # as independent answer criteria before interpolating them
-                    # into the equality-checker prompt.
+                    # The official equality-checker interpolates the CSV
+                    # value verbatim.  It is a single reference answer, not a
+                    # Python list of semicolon-separated criteria.
                     'answer':
-                    raw['answer'].split(';'),
+                    raw['answer'],
                     'prompt':
                     _build_aa_lcr_prompt(documents, raw['question']),
                     'document_category':

@@ -1,5 +1,6 @@
 import os
 import re
+from collections import defaultdict
 
 from datasets import Dataset, load_dataset
 
@@ -31,11 +32,20 @@ class SuperGPQADataset(BaseDataset):
     @staticmethod
     def load(path: str,
              prompt_mode: str,
+             hf_revision: str = None,
              discipline: str = None,
              field: str = None,
              subfield: str = None,
+             samples_per_discipline_difficulty: int = None,
              **kwargs):
-        dataset = load_dataset(path, split='train')
+        dataset = load_dataset(path, split='train', revision=hf_revision)
+
+        if (samples_per_discipline_difficulty is not None
+                and (not isinstance(samples_per_discipline_difficulty, int)
+                     or isinstance(samples_per_discipline_difficulty, bool)
+                     or samples_per_discipline_difficulty <= 0)):
+            raise ValueError('samples_per_discipline_difficulty must be a '
+                             'positive integer')
 
         if discipline is not None:
             dataset = dataset.filter(lambda x: x['discipline'] == discipline)
@@ -43,6 +53,16 @@ class SuperGPQADataset(BaseDataset):
             dataset = dataset.filter(lambda x: x['field'] == field)
         if subfield is not None:
             dataset = dataset.filter(lambda x: x['subfield'] == subfield)
+
+        if samples_per_discipline_difficulty is not None:
+            counts = defaultdict(int)
+            selected = []
+            for index, item in enumerate(dataset):
+                key = (item['discipline'], item['difficulty'])
+                if counts[key] < samples_per_discipline_difficulty:
+                    selected.append(index)
+                    counts[key] += 1
+            dataset = dataset.select(selected)
 
         # get prompt template
         template_path = None
@@ -73,6 +93,11 @@ class SuperGPQAEvaluator(BaseEvaluator):
         super().__init__()
 
     def score(self, predictions, references, test_set):
+        if not (len(predictions) == len(references) == len(test_set)):
+            return {
+                'error': 'predictions, references, and test_set have '
+                'different lengths'
+            }
         mode = test_set[0]['prompt_mode']
         acc = 0
         count = 0
@@ -181,19 +206,19 @@ class SuperGPQAEvaluator(BaseEvaluator):
 
         return {
             'accuracy':
-            acc / count if count > 0 else 0,
+            100 * acc / count if count > 0 else 0,
             'error_rate':
-            err / count if count > 0 else 0,
+            100 * err / count if count > 0 else 0,
             'miss_rate':
-            miss / count if count > 0 else 0,
+            100 * miss / count if count > 0 else 0,
             'hard_accuracy':
-            (acc_difficulty['hard'] /
+            (100 * acc_difficulty['hard'] /
              count_difficulty['hard'] if count_difficulty['hard'] > 0 else 0),
             'middle_accuracy':
-            (acc_difficulty['middle'] / count_difficulty['middle']
+            (100 * acc_difficulty['middle'] / count_difficulty['middle']
              if count_difficulty['middle'] > 0 else 0),
             'easy_accuracy':
-            (acc_difficulty['easy'] /
+            (100 * acc_difficulty['easy'] /
              count_difficulty['easy'] if count_difficulty['easy'] > 0 else 0),
             'details':
             details,

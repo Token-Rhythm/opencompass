@@ -10,6 +10,9 @@ HMMT February/November 2025 的可复现实验协议。所有 Hugging Face 数�
 ```bash
 opencompass --models <model-config> --datasets mmlu_redux_gen
 opencompass --models <model-config> --datasets mmlu_prox_5shot_cot_gen --summarizer mmlu_prox
+opencompass --models <model-config> --datasets mmlu_prox_0shot_cot_gen --summarizer mmlu_prox_0shot
+opencompass --models <model-config> --datasets mmlu_prox_lite_5shot_cot_gen --summarizer mmlu_prox_lite
+opencompass --models <model-config> --datasets mmlu_prox_lite_0shot_cot_gen --summarizer mmlu_prox_lite_0shot
 opencompass --models <model-config> --datasets global_piqa_generation
 opencompass --models <model-config> --datasets include_base_44_0shot_ppl
 opencompass --models <model-config> --datasets hmmt_2025_matharena_gen
@@ -63,17 +66,50 @@ models = [dict(
 文字仍相同，但 chat template 会增加 system/user/assistant token，所得分数不再是
 上述 lm-evaluation-harness 原始协议的严格复现。
 
+MMLU-ProX 的四套配置共用同一套结构化 prompt：description 是 system message；
+5-shot 的五条 validation 示例分别表示为 user/assistant 对；待测题是最后一条 user
+message。使用 chat endpoint 时会保留这些角色；使用 completions 且
+`meta_template=None` 时，客户端只按顺序连接各 message 的 content，不插入角色标签，
+所得文本与官方 lm-evaluation-harness 未传 `--apply_chat_template` 时一致。四套配置为：
+
+| 配置 | 数据版本 | Few-shot |
+|---|---|---|
+| `mmlu_prox_5shot_cot_gen` | Full | validation 每类前 5 条 |
+| `mmlu_prox_0shot_cot_gen` | Full | 0 |
+| `mmlu_prox_lite_5shot_cot_gen` | Lite | validation 每类前 5 条 |
+| `mmlu_prox_lite_0shot_cot_gen` | Lite | 0 |
+
+smoke 脚本默认让可切换的生成任务走 chat；可用
+`--generation-endpoint completions` 改为官方原始 prompt 路径。Global PIQA 和 HMMT
+也使用结构化的单条 user message，完整 content 分别是官方题面与“instruction + 题面”，
+不会退化成只传 question 字段。这里实际支持的 OpenAI 兼容路径名称是
+`/v1/chat/completions` 和 `/v1/completions`。使用 `--full` 时脚本选中所有子集和样本，
+并保留各数据集配置自己的输出 token 上限。
+
+MMLU-Redux 的 57 个 subject 各自带有 lm-evaluation-harness 定义的
+`description`。数据集配置将 description 表示为 system message、题目表示为 user
+message：使用 chat endpoint 时二者直接进入对应的 `messages` 字段；使用
+`generation_endpoint='completions'` 且 `meta_template=None` 时，客户端按顺序连接
+两者的 `content`，生成与 lm-evaluation-harness 未启用 chat template 时一致的原始
+prompt，不加入 role 标签或额外分隔符。
+
 ## 数据和协议固定点
 
 | Benchmark | 官方数据 revision | 复现协议 |
 |---|---|---|
 | MMLU-Redux 2.0 | `edinburgh-dawg/mmlu-redux-2.0@372ea425445d51e1ba1188c56e5e893f8138621f` | 57 个 subject；仅保留 `error_type == "ok"`；官方 generative prompt；提取首个大写 A-D；按样本数聚合 |
-| MMLU-ProX | `li-lab/MMLU-ProX@8e6106a6c6ce1c5027e66cc338143cf997b2aa09` | 29 种语言 × 14 类；每类 validation 前 5 条 CoT few-shot；本地化 instruction/prompt/答案正则；确定性生成 |
+| MMLU-ProX | `li-lab/MMLU-ProX@8e6106a6c6ce1c5027e66cc338143cf997b2aa09` | 29 种语言 × 14 类；支持每类 validation 前 5 条 CoT few-shot 和 zero-shot；本地化 instruction/prompt/答案正则；确定性生成 |
+| MMLU-ProX Lite | `li-lab/MMLU-ProX-Lite@e82aafb9460529687d3c7e51b401d8dd1dd309dd` | 29 种语言 × 14 类；70 条 validation、588 条 test；支持 5-shot 与 zero-shot；按各类实际 test 数量聚合 |
 | Global PIQA nonparallel | `mrlbenchmarks/global-piqa-nonparallel@6777742fa3634c0583cda3b7f8a482ea7b1b0937` | 官方 generation prompt、严格答案正则、`temperature=0.8`、`top_p=0.95` |
 | Global PIQA parallel | `mrlbenchmarks/global-piqa-parallel@b0b18516a8bc2cb1106bce3dd4db32848ca715ea` | 同上；先对各语言做宏平均，再对 parallel/nonparallel 做宏平均 |
 | INCLUDE base-44 | `CohereLabs/include-base-44@d2e1f6015f67a43c02a9a68db98e2298e2d6a660` | 44 种语言；官方 zero-shot multiple-choice log-likelihood；每种语言单独报告 accuracy |
 | HMMT Feb 2025 | `MathArena/hmmt_feb_2025@6fdc4277120810ff75aa22d2d5489b91f7a262a1` | 30 题；官方 instruction；MathArena `strict_parsing=false` 评分 |
 | HMMT Nov 2025 | `MathArena/hmmt_nov_2025@118dbfb45c4c9467c672268ed55166642897aa46` | 30 题；协议同上 |
+
+HMMT 表中的 accuracy 是单次生成的 pass@1。MathArena 官网 runner 默认通过 `--n 4`
+对每题运行四次，并在严格 parser 找不到 boxed answer 时额外发起一次只负责重报答案的
+last-chance 请求；这属于官网 runner 的多次采样/恢复编排，不是上述单次数据集 scorer。
+若要和官网展示值逐数比较，需要在外层执行四次并采用相同 last-chance 编排。
 
 协议实现对齐到 lm-evaluation-harness commit
 `f4d4b3de3ee6741a7151a9fe74945ee515262f4c`。MMLU-ProX 的本地化文案来自

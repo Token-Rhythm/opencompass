@@ -7,6 +7,11 @@ from .evaluation_lib import (InputExample, test_instruction_following_loose,
 class IFBenchEvaluator(BaseEvaluator):
 
     def score(self, predictions, references, origin_prompt):
+        if not (len(predictions) == len(references) == len(origin_prompt)):
+            return {
+                'error': 'predictions, references, and origin_prompt have '
+                'different lengths'
+            }
         prompt_strict_correct, prompt_strict_total = 0, 0
         inst_strict_correct, inst_strict_total = 0, 0
         prompt_loose_correct, prompt_loose_total = 0, 0
@@ -60,19 +65,27 @@ class IFBenchEvaluator(BaseEvaluator):
                 'grade': grade
             }
 
+        prompt_strict_accuracy = (
+            prompt_strict_correct / prompt_strict_total * 100)
+        inst_strict_accuracy = inst_strict_correct / inst_strict_total * 100
+        prompt_loose_accuracy = prompt_loose_correct / prompt_loose_total * 100
+        inst_loose_accuracy = inst_loose_correct / inst_loose_total * 100
         results = {
-            'score': ((prompt_strict_correct / prompt_strict_total * 100) +
-                      (inst_strict_correct / inst_strict_total * 100) +
-                      (prompt_loose_correct / prompt_loose_total * 100) +
-                      (inst_loose_correct / inst_loose_total * 100)) / 4,
+            # The official IFBench repository reports prompt-level loose
+            # accuracy as the headline leaderboard score.
+            'score': prompt_loose_accuracy,
+            'average_4_metrics': (prompt_strict_accuracy +
+                                  inst_strict_accuracy +
+                                  prompt_loose_accuracy +
+                                  inst_loose_accuracy) / 4,
             'Prompt-level-strict-accuracy':
-            prompt_strict_correct / prompt_strict_total * 100,
+            prompt_strict_accuracy,
             'Inst-level-strict-accuracy':
-            inst_strict_correct / inst_strict_total * 100,
+            inst_strict_accuracy,
             'Prompt-level-loose-accuracy':
-            prompt_loose_correct / prompt_loose_total * 100,
+            prompt_loose_accuracy,
             'Inst-level-loose-accuracy':
-            inst_loose_correct / inst_loose_total * 100,
+            inst_loose_accuracy,
             'details':
             details
         }

@@ -2,7 +2,7 @@ from opencompass.datasets.supergpqa.supergpqa import (
     SuperGPQADataset,
     SuperGPQAEvaluator,
 )
-from opencompass.openicl.icl_inferencer import GenInferencer
+from opencompass.openicl.icl_inferencer import ParallelGenInferencer
 from opencompass.openicl.icl_prompt_template import PromptTemplate
 from opencompass.openicl.icl_retriever import ZeroRetriever
 
@@ -36,7 +36,10 @@ infer_cfg = dict(
         ),
     ),
     retriever=dict(type=ZeroRetriever),
-    inferencer=dict(type=GenInferencer),
+    # SuperGPQA contains 26k+ examples.  Keep a rolling API worker pool so a
+    # single long-thinking response does not hold an entire inference batch,
+    # and persist every completed response for safe resume.
+    inferencer=dict(type=ParallelGenInferencer, save_every=1),
 )
 
 # Evaluation configuration
@@ -48,6 +51,7 @@ supergpqa_dataset = dict(
     type=SuperGPQADataset,
     abbr='supergpqa',
     path='m-a-p/SuperGPQA',
+    hf_revision='4430d4458112c7d4497fdcf94d7cc223313d6acf',
     prompt_mode='zero-shot',
     reader_cfg=reader_cfg,
     infer_cfg=infer_cfg,

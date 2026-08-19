@@ -1,6 +1,6 @@
 import json
 
-from datasets import Dataset
+from datasets import Dataset, load_dataset
 
 from opencompass.openicl.icl_evaluator import BaseEvaluator
 from opencompass.registry import LOAD_DATASET
@@ -15,7 +15,16 @@ from .evaluation_main import (InputExample, test_instruction_following_loose,
 class IFEvalDataset(BaseDataset):
 
     @staticmethod
-    def load(path):
+    def load(path, hf_revision=None, hf_split='train'):
+        if hf_revision is not None:
+            source = load_dataset(path, split=hf_split, revision=hf_revision)
+            datasets = []
+            for row in source:
+                reference = dict(row)
+                datasets.append(
+                    dict(prompt=reference['prompt'], reference=reference))
+            return Dataset.from_list(datasets)
+
         path = get_data_path(path)
         datasets = []
         with open(path, 'r', encoding='utf-8') as file:
@@ -29,6 +38,11 @@ class IFEvalDataset(BaseDataset):
 class IFEvaluator(BaseEvaluator):
 
     def score(self, predictions, references, origin_prompt):
+        if not (len(predictions) == len(references) == len(origin_prompt)):
+            return {
+                'error': 'predictions, references, and origin_prompt have '
+                'different lengths'
+            }
         prompt_strict_correct, prompt_strict_total = 0, 0
         inst_strict_correct, inst_strict_total = 0, 0
         prompt_loose_correct, prompt_loose_total = 0, 0

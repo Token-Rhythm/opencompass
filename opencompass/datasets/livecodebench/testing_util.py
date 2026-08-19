@@ -8,6 +8,7 @@ import platform
 # to run the solution files we're using a timing based approach
 import signal
 import sys
+import types
 # used for debugging to time steps
 from datetime import datetime
 from enum import Enum
@@ -22,6 +23,26 @@ try:
     from pyext import RuntimeModule
 except ImportError:
     RuntimeModule = None
+
+
+def runtime_module_from_string(name, docstring, source):
+    """Compile *source* into a module, with a Python 3.11+ fallback.
+
+    ``pyext==0.7`` cannot be installed on supported Python versions newer
+    than 3.10 because it imports the removed ``inspect.getargspec`` API.
+    LiveCodeBench only needs ``RuntimeModule.from_string`` to obtain a module
+    object, so preserve that behavior with ``compile``/``exec`` when pyext is
+    unavailable.  Evaluation still runs in the existing short-lived worker
+    process after ``reliability_guard`` has been applied.
+    """
+    if RuntimeModule is not None:
+        return RuntimeModule.from_string(name, docstring, source)
+
+    module = types.ModuleType(name, docstring)
+    module.__file__ = f'<{name}>'
+    sys.modules[name] = module
+    exec(compile(source, module.__file__, 'exec'), module.__dict__)
+    return module
 
 
 def truncatefn(s, length=300):
@@ -125,7 +146,7 @@ def run_test(sample, test=None, debug=False, timeout=6):
                 print(f'sol = {sol}')
             signal.alarm(timeout)
             try:
-                tmp_sol = RuntimeModule.from_string('tmp_sol', '', sol)
+                tmp_sol = runtime_module_from_string('tmp_sol', '', sol)
                 if 'class Solution' not in test:
                     tmp = tmp_sol
                 else:
@@ -190,7 +211,7 @@ def run_test(sample, test=None, debug=False, timeout=6):
             method_name = 'code'
             signal.alarm(timeout)
             try:
-                tmp_sol = RuntimeModule.from_string('tmp_sol', '', sol)
+                tmp_sol = runtime_module_from_string('tmp_sol', '', sol)
                 tmp = tmp_sol
                 signal.alarm(0)
             except Exception as e:
