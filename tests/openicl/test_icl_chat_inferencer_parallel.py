@@ -2,6 +2,8 @@
 
 import os
 import tempfile
+import threading
+import time
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -28,6 +30,20 @@ class TestParallelChatInferencer(unittest.TestCase):
         self.assertEqual(inferencer.max_infer_workers, 4)
         self.assertIsNone(inferencer.progress_tracker)
         self.assertEqual(inferencer.max_out_len, 512)
+
+    def test_scicode_configs_select_parallel_chat_inferencer(self):
+        from opencompass.configs.datasets.scicode.scicode_gen_62c139 import \
+            SciCode_datasets as legacy_datasets
+        from opencompass.configs.datasets.scicode.scicode_gen_085b98 import \
+            SciCode_datasets as datasets
+        from opencompass.configs.datasets.scicode.scicode_wbg_gen_085b98 import \
+            SciCode_datasets as background_datasets
+
+        for configured_datasets in (
+                datasets, background_datasets, legacy_datasets):
+            inferencer_type = configured_datasets[0]['infer_cfg'][
+                'inferencer']['type']
+            self.assertIs(inferencer_type, ParallelChatInferencer)
 
     def test_initialization_defaults(self):
         """Test initialization with default values."""
@@ -240,6 +256,77 @@ class TestParallelChatInferencer(unittest.TestCase):
         inferencer.inference(mock_retriever)
 
         mock_retriever.retrieve.assert_called_once()
+
+    def test_every_mode_uses_model_worker_limit_and_keeps_round_order(self):
+        """Structured multi-round samples run concurrently, rounds do not."""
+        state_lock = threading.Lock()
+        active = 0
+        peak_active = 0
+
+        def generate_from_template(inputs, max_out_len):
+            nonlocal active, peak_active
+            history = inputs[0]
+            with state_lock:
+                active += 1
+                peak_active = max(peak_active, active)
+            time.sleep(0.03)
+            with state_lock:
+                active -= 1
+            question = history[-1]['content']
+            return [{
+                'reasoning_content': f'reason:{question}',
+                'content': f'answer:{question}',
+            }]
+
+        self.mock_model.max_workers = 2
+        self.mock_model.generate_from_template.side_effect = (
+            generate_from_template)
+        inferencer = ParallelChatInferencer(
+            model=self.mock_model,
+            max_out_len=512,
+            infer_mode='every',
+            save_every=None,
+            output_json_filepath=self.temp_dir,
+            output_json_filename='parallel_predictions',
+        )
+        chats = []
+        for sample_index in range(4):
+            chats.append([
+                {
+                    'role': 'user',
+                    'content': f'q{sample_index}.1',
+                },
+                {
+                    'role': 'assistant',
+                    'content': f'g{sample_index}.1',
+                },
+                {
+                    'role': 'user',
+                    'content': f'q{sample_index}.2',
+                },
+                {
+                    'role': 'assistant',
+                    'content': f'g{sample_index}.2',
+                },
+            ])
+        inferencer.get_chat_list = MagicMock(return_value=chats)
+        retriever = MagicMock()
+        retriever.retrieve.return_value = [[] for _ in chats]
+
+        results = inferencer.inference(retriever)
+
+        self.assertEqual(peak_active, 2)
+        self.assertEqual(len(results), 4)
+        for sample_index in range(4):
+            result = results[str(sample_index)]
+            self.assertEqual(result['prediction'], [
+                f'answer:q{sample_index}.1',
+                f'answer:q{sample_index}.2',
+            ])
+            self.assertEqual(result['gold'], [
+                f'g{sample_index}.1',
+                f'g{sample_index}.2',
+            ])
 
     def tearDown(self):
         """Clean up test fixtures."""

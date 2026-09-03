@@ -128,10 +128,11 @@ class VLLMOpenAIAPI(OpenAISDK):
 
         query_data = dict(model=self.path,
                           prompt=prompt,
-                          max_tokens=max_out_len,
                           n=1,
                           temperature=temperature,
                           extra_body=self.extra_body)
+        if max_out_len is not None:
+            query_data['max_tokens'] = max_out_len
         if stopping_criteria:
             query_data['stop'] = stopping_criteria
         if self.openai_extra_kwargs:
@@ -186,11 +187,12 @@ class VLLMOpenAIAPI(OpenAISDK):
             input, max_out_len, self.max_seq_len, self.mode,
             self.get_token_len)
         query_data = dict(model=self.path,
-                          max_tokens=max_out_len,
                           n=1,
                           temperature=temperature,
                           messages=messages,
                           extra_body=self.extra_body)
+        if max_out_len is not None:
+            query_data['max_tokens'] = max_out_len
         if stopping_criteria:
             query_data['stop'] = stopping_criteria
         if self.openai_extra_kwargs:

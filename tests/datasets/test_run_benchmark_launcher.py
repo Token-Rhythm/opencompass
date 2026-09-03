@@ -33,9 +33,9 @@ def test_default_dry_run_selects_every_benchmark_once(tmp_path):
                         '--output-root', str(tmp_path))
 
     assert result.returncode == 0, result.stderr
-    assert 'Selected benchmarks (20):' in result.stdout
-    assert result.stdout.count('DRY-RUN:') == 20
-    assert result.stdout.count('DRY-RUN score gate:') == 20
+    assert 'Selected benchmarks (21):' in result.stdout
+    assert result.stdout.count('DRY-RUN:') == 21
+    assert result.stdout.count('DRY-RUN score gate:') == 21
     assert 'Execution policy: sequential infer -> eval -> numeric-summary check' in result.stdout
     assert 'aa_lcr: infer -> eval -> summary' not in result.stdout
     assert 'multichallenge: infer -> eval -> summary' not in result.stdout
@@ -53,6 +53,29 @@ def test_partial_selection_accepts_aliases_and_deduplicates(tmp_path):
     assert result.stdout.count('DRY-RUN:') == 3
     assert ('run_posttrain_objective_benchmark.sh hmmt_feb_2025'
             in result.stdout)
+
+
+def test_scicode_alias_and_output_limit_reach_shared_core(tmp_path):
+    result = run_script(
+        '--dry-run', '--run-id', 'test_scicode',
+        '--output-root', str(tmp_path), '--benchmark', 'Sci-Code',
+        '--max-seq-len', '131072', '--max-out-len', '51200')
+
+    assert result.returncode == 0, result.stderr
+    assert 'Selected benchmarks (1): scicode' in result.stdout
+    command_line = next(line for line in result.stdout.splitlines()
+                        if line.startswith('DRY-RUN:'))
+    assert 'run_posttrain_objective_benchmark.sh scicode' in command_line
+    command = shlex.split(command_line.removeprefix('DRY-RUN:'))
+
+    def final_value(option):
+        positions = [index for index, value in enumerate(command)
+                     if value == option]
+        assert positions, option
+        return command[positions[-1] + 1]
+
+    assert final_value('--max-seq-len') == '131072'
+    assert final_value('--max-out-len') == '51200'
 
 
 def test_priority_suite_profiles_regular_then_hmmt_then_longbench(tmp_path):
@@ -266,7 +289,7 @@ def test_all_benchmarks_use_one_shared_execution_script(tmp_path):
     assert result.returncode == 0, result.stderr
     command_lines = [line for line in result.stdout.splitlines()
                      if line.startswith('DRY-RUN:')]
-    assert len(command_lines) == 20
+    assert len(command_lines) == 21
     assert all('run_posttrain_objective_benchmark.sh' in line
                for line in command_lines)
     assert all('run_language_benchmarks_smoke.sh' not in line

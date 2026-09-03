@@ -22,6 +22,7 @@ ALL_BENCHMARKS=(
   aime_2024
   aime_2025
   aime_2026
+  scicode
   livecodebench
   humaneval
   mmlu_redux_downsampling
@@ -50,6 +51,7 @@ declare -A CORE_TARGETS=(
   [aime_2025]=aime2025
   [aime_2026]=aime2026
   [hmmt_feb_2026]=hmmt2026
+  [scicode]=scicode
   [livecodebench]=livecodebench
   [humaneval]=humaneval
   [mmlu_prox_downsampling]=mmlu_prox_downsampling
@@ -90,6 +92,7 @@ SHORT_CONCURRENCY_PER_REPLICA="${OPENCOMPASS_SHORT_CONCURRENCY_PER_REPLICA:-256}
 LONG_OUTPUT_CONCURRENCY_PER_REPLICA="${OPENCOMPASS_LONG_OUTPUT_CONCURRENCY_PER_REPLICA:-128}"
 LONG_CONTEXT_CONCURRENCY_PER_REPLICA="${OPENCOMPASS_LONG_CONTEXT_CONCURRENCY_PER_REPLICA:-32}"
 MAX_DATASET_WORKERS="${OPENCOMPASS_MAX_DATASET_WORKERS:-14}"
+BATCH_SIZE_OVERRIDE="${OPENCOMPASS_BATCH_SIZE_OVERRIDE:-}"
 
 usage() {
   cat <<'EOF'
@@ -133,7 +136,8 @@ Execution engines:
 Canonical benchmark names:
   mmlu_pro, ceval, supergpqa, ifeval, mmmlu_downsampling, gpqa_diamond,
   ifbench, longbench_v2, aime_2024, aime_2025, aime_2026,
-  hmmt_feb_2026, livecodebench, humaneval, mmlu_redux_downsampling,
+  hmmt_feb_2026, scicode, livecodebench, humaneval,
+  mmlu_redux_downsampling,
   mmlu_prox_downsampling, global_piqa_downsampling, hmmt_feb_2025,
   hmmt_nov_2025, include_downsampling
 
@@ -152,6 +156,7 @@ Runtime options:
                               defaults to --model when omitted
   --max-seq-len N            Global override; otherwise retain task defaults
   --max-out-len N            Global override; otherwise retain task defaults
+  --omit-max-out-len       Do not send an output-token limit
   --temperature FLOAT        Global override; otherwise retain task defaults
   --query-per-second N       Global override
   --batch-size N             Global override
@@ -248,6 +253,7 @@ canonicalize_benchmark() {
     aime25|aime2025|aime_2025) echo aime_2025 ;;
     aime26|aime2026|aime_2026) echo aime_2026 ;;
     hmmt2026|hmmt_feb2026|hmmt_feb_2026) echo hmmt_feb_2026 ;;
+    scicode|sci_code) echo scicode ;;
     livecodebench|live_code_bench|livecodebench_v6) echo livecodebench ;;
     humaneval|human_eval|openai_humaneval) echo humaneval ;;
     mmlu_redux_downsampling|mmluredux_downsampling) echo mmlu_redux_downsampling ;;
@@ -327,6 +333,10 @@ while (( $# > 0 )); do
       require_value "$1" "$#"
       COMMON_ARGS+=("$1" "$2")
       shift 2
+      ;;
+    --omit-max-out-len)
+      COMMON_ARGS+=("$1")
+      shift
       ;;
     --stream-responses|--no-stream-responses)
       COMMON_ARGS+=("$1")
@@ -547,6 +557,7 @@ build_command() {
   local concurrency_profile=short
   local total_concurrency
   local workers_per_dataset
+  local request_batch_size
   TASK_ARGS=()
 
   case "$benchmark" in
@@ -608,8 +619,15 @@ build_command() {
 
   total_concurrency=$((VLLM_REPLICA_COUNT * concurrency_per_replica))
   workers_per_dataset=$(((total_concurrency + dataset_workers - 1) / dataset_workers))
+  if [[ -n "$BATCH_SIZE_OVERRIDE" ]]; then
+    [[ "$BATCH_SIZE_OVERRIDE" =~ ^[1-9][0-9]*$ ]] || die \
+      'OPENCOMPASS_BATCH_SIZE_OVERRIDE must be a positive integer'
+    request_batch_size="$BATCH_SIZE_OVERRIDE"
+  else
+    request_batch_size="$workers_per_dataset"
+  fi
   TASK_ARGS+=(
-    --batch-size "$workers_per_dataset"
+    --batch-size "$request_batch_size"
     --max-workers "$workers_per_dataset"
     --query-per-second "$workers_per_dataset"
     --dataset-workers "$dataset_workers"
@@ -621,6 +639,7 @@ build_command() {
     "$total_concurrency"
     "$dataset_workers"
     "$workers_per_dataset"
+    "$request_batch_size"
   )
 
   core_target="${CORE_TARGETS[$benchmark]:-}"
@@ -741,7 +760,8 @@ for index in "${!SELECTED[@]}"; do
 "per_replica=${CONCURRENCY_DESCRIPTION[2]} "\
 "total=${CONCURRENCY_DESCRIPTION[3]} "\
 "dataset_workers=${CONCURRENCY_DESCRIPTION[4]} "\
-"workers_per_dataset=${CONCURRENCY_DESCRIPTION[5]}"
+"workers_per_dataset=${CONCURRENCY_DESCRIPTION[5]} "\
+"batch_size=${CONCURRENCY_DESCRIPTION[6]}"
   if (( DRY_RUN )); then
     printf 'DRY-RUN:'
     print_command_redacted "${TASK_COMMAND[@]}"

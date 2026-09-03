@@ -21,6 +21,7 @@ PYTHON_BIN="${PYTHON_BIN:-${REPO_ROOT}/../opencompass-venv/bin/python}"
 TOKENIZER_PATH="Qwen/Qwen3.5-2B"
 MAX_SEQ_LEN="65536"
 MAX_OUT_LEN="4096"
+OMIT_MAX_OUT_LEN="0"
 TEMPERATURE="1.0"
 QUERY_PER_SECOND="64"
 BATCH_SIZE="512"
@@ -182,6 +183,17 @@ case "$BENCHMARK" in
     WORK_DIR="outputs/hmmt_feb_2026_full_chat"
     MAX_OUT_LEN="32768"
     ;;
+  scicode)
+    BENCHMARK_LABEL="SciCode"
+    DATASET_MODULE="opencompass.configs.datasets.scicode.scicode_gen"
+    DATASET_VARIABLE="SciCode_datasets"
+    SUMMARY_IMPORT=""
+    SUMMARY_GROUPS_EXPR="[]"
+    SUMMARY_ABBRS_EXPR="[['SciCode', 'accuracy'], ['SciCode', 'sub_accuracy']]"
+    WORK_DIR="outputs/scicode_full_chat"
+    MAX_OUT_LEN="4096"
+    OMIT_MAX_OUT_LEN="1"
+    ;;
   livecodebench)
     BENCHMARK_LABEL="LiveCodeBench v6 Code Generation"
     DATASET_MODULE="opencompass.configs.datasets.livecodebench.livecodebench_v6_codegen"
@@ -334,7 +346,7 @@ case "$BENCHMARK" in
     ;;
   *)
     echo "Unsupported benchmark: $BENCHMARK" >&2
-    echo "Expected one of: mmlu_pro, ceval, ceval_evalscope, supergpqa, gpqa_diamond, ifeval, ifbench, longbenchv2, aa_lcr, aime2024, aime2025, aime2026, hmmt2026, livecodebench, humaneval, mmmlu, mmlu_prox, global_piqa, mmlu_redux, hmmt_feb_2025, hmmt_nov_2025, multichallenge, include" >&2
+    echo "Expected one of: mmlu_pro, ceval, ceval_evalscope, supergpqa, gpqa_diamond, ifeval, ifbench, longbenchv2, aa_lcr, aime2024, aime2025, aime2026, hmmt2026, scicode, livecodebench, humaneval, mmmlu, mmlu_prox, global_piqa, mmlu_redux, hmmt_feb_2025, hmmt_nov_2025, multichallenge, include" >&2
     exit 1
     ;;
 esac
@@ -359,6 +371,7 @@ Options:
   --work-dir PATH            Default: $WORK_DIR
   --max-seq-len N            Default: $MAX_SEQ_LEN
   --max-out-len N            Default: $MAX_OUT_LEN
+  --omit-max-out-len       Omit max_tokens from the inference request
   --temperature FLOAT        Default: $TEMPERATURE
   --query-per-second N       Default: $QUERY_PER_SECOND
   --batch-size N             Prompts queued per inference batch; default: $BATCH_SIZE
@@ -408,6 +421,7 @@ while [[ $# -gt 0 ]]; do
     --work-dir) WORK_DIR="$2"; shift 2 ;;
     --max-seq-len) MAX_SEQ_LEN="$2"; shift 2 ;;
     --max-out-len) MAX_OUT_LEN="$2"; shift 2 ;;
+    --omit-max-out-len) OMIT_MAX_OUT_LEN="1"; shift ;;
     --temperature) TEMPERATURE="$2"; shift 2 ;;
     --query-per-second) QUERY_PER_SECOND="$2"; shift 2 ;;
     --batch-size) BATCH_SIZE="$2"; shift 2 ;;
@@ -461,7 +475,14 @@ NORMALIZED_BASE_URL="${BASE_URL%/}"
 NORMALIZED_BASE_URL="${NORMALIZED_BASE_URL%/chat/completions}"
 NORMALIZED_BASE_URL="${NORMALIZED_BASE_URL%/completions}"
 
-SERVED_MAX_SEQ_LEN="$($PYTHON_BIN - "$NORMALIZED_BASE_URL" "$API_KEY" "$MODEL" "$PREFLIGHT_TIMEOUT" "$PREFLIGHT_ATTEMPTS" "$PREFLIGHT_BACKOFF" <<'PY'
+if [[ -n "${OPENCOMPASS_SERVED_MAX_SEQ_LEN_OVERRIDE:-}" ]]; then
+  [[ "$OPENCOMPASS_SERVED_MAX_SEQ_LEN_OVERRIDE" =~ ^[1-9][0-9]*$ ]] || {
+    echo "OPENCOMPASS_SERVED_MAX_SEQ_LEN_OVERRIDE must be a positive integer" >&2
+    exit 1
+  }
+  SERVED_MAX_SEQ_LEN="$OPENCOMPASS_SERVED_MAX_SEQ_LEN_OVERRIDE"
+else
+  SERVED_MAX_SEQ_LEN="$($PYTHON_BIN - "$NORMALIZED_BASE_URL" "$API_KEY" "$MODEL" "$PREFLIGHT_TIMEOUT" "$PREFLIGHT_ATTEMPTS" "$PREFLIGHT_BACKOFF" <<'PY'
 import json
 import sys
 import time
@@ -506,6 +527,7 @@ for attempt in range(1, attempts + 1):
         time.sleep(delay)
 PY
 )"
+fi
 if [[ "$SERVED_MAX_SEQ_LEN" == ERROR:* ]]; then
   echo "vLLM endpoint preflight failed at ${NORMALIZED_BASE_URL}:" >&2
   echo "${SERVED_MAX_SEQ_LEN#ERROR:}" >&2
@@ -597,6 +619,10 @@ if [[ "$STREAM_RESPONSES" == "1" ]]; then
 else
   STREAM_RESPONSES_PY="False"
 fi
+MAX_OUT_LEN_PY="$MAX_OUT_LEN"
+if [[ "$OMIT_MAX_OUT_LEN" == "1" ]]; then
+  MAX_OUT_LEN_PY="None"
+fi
 BASE_URL_PY="$($PYTHON_BIN -c 'import sys; print(repr(sys.argv[1]))' "$NORMALIZED_BASE_URL")"
 API_KEY_PY="$($PYTHON_BIN -c 'import sys; print(repr(sys.argv[1]))' "$API_KEY")"
 MODEL_PY="$($PYTHON_BIN -c 'import sys; print(repr(sys.argv[1]))' "$MODEL")"
@@ -642,7 +668,7 @@ model_cfg = dict(
     openai_api_base=${BASE_URL_PY},
     max_seq_len=${MAX_SEQ_LEN},
     mode=${INPUT_TRUNCATION_MODE_PY},
-    max_out_len=${MAX_OUT_LEN},
+    max_out_len=${MAX_OUT_LEN_PY},
     query_per_second=${QUERY_PER_SECOND},
     batch_size=${BATCH_SIZE},
     retry=${RETRY},
@@ -694,7 +720,7 @@ for dataset in datasets:
     if protocol != 'logprob':
         inferencer = dataset['infer_cfg']['inferencer']
         inferencer['max_seq_len'] = ${MAX_SEQ_LEN}
-        inferencer['max_out_len'] = ${MAX_OUT_LEN}
+        inferencer['max_out_len'] = ${MAX_OUT_LEN_PY}
     evaluator_dataset = dataset['eval_cfg']['evaluator'].get('dataset_cfg')
     if evaluator_dataset is not None:
         if test_ranges:
@@ -784,7 +810,11 @@ if [[ -n "$DOWNSAMPLING_KEY" ]]; then
   echo "Downsampling benchmark: ${DOWNSAMPLING_KEY}_downsampling"
   echo "Downsampling manifest: $DOWNSAMPLING_MANIFEST"
 fi
-echo "max_seq_len/max_out_len: $MAX_SEQ_LEN/$MAX_OUT_LEN"
+if [[ "$OMIT_MAX_OUT_LEN" == "1" ]]; then
+  echo "max_seq_len/max_out_len: $MAX_SEQ_LEN/omitted"
+else
+  echo "max_seq_len/max_out_len: $MAX_SEQ_LEN/$MAX_OUT_LEN"
+fi
 echo "batch_size/max_workers: $BATCH_SIZE/$MAX_WORKERS"
 echo "OpenCompass dataset workers: $DATASET_WORKERS"
 echo "query_per_second/retry/timeout: $QUERY_PER_SECOND/$RETRY/$TIMEOUT"

@@ -775,20 +775,22 @@ class OpenAISDK(OpenAI):
                     f'We use max_out_len: {max_out_len} for this query')
                 query_data = dict(
                     model=self.path,
-                    max_completion_tokens=max_out_len,
                     n=1,
                     messages=messages,
                     extra_body=self.extra_body,
                 )
+                if max_out_len is not None:
+                    query_data['max_completion_tokens'] = max_out_len
             else:
                 query_data = dict(
                     model=self.path,
-                    max_tokens=max_out_len,
                     n=1,
                     temperature=temperature,
                     messages=messages,
                     extra_body=self.extra_body,
                 )
+                if max_out_len is not None:
+                    query_data['max_tokens'] = max_out_len
 
             if stopping_criteria:
                 query_data['stop'] = stopping_criteria

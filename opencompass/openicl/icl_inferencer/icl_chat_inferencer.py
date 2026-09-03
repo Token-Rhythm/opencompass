@@ -16,7 +16,8 @@ from opencompass.utils.prompt import PromptList
 from ..icl_prompt_template import PromptTemplate
 from ..icl_retriever import BaseRetriever
 from ..utils.logging import get_logger
-from .icl_base_inferencer import BaseInferencer, ChatOutputHandler
+from .icl_base_inferencer import (BaseInferencer, ChatOutputHandler,
+                                  prediction_content)
 
 logger = get_logger(__name__)
 
@@ -318,16 +319,21 @@ class ChatInferencer(BaseInferencer):
         index_copy = index
 
         for i in assistant_indices:
+            gold = chat[i]['content']
             history = chat[:i]
             output = self.model.generate_from_template(
                 [history], max_out_len=self.max_out_len)[0]
-            chat[i]['content'] = output
+            # Both streaming and non-streaming reasoning APIs return a
+            # structured object. Only the final answer belongs in the next
+            # round's assistant message; persisting the whole object here
+            # makes the tokenizer receive a dict on the following round.
+            chat[i]['content'] = prediction_content(output)
             if not self.dialogue_mode:
                 output_handler.save_multiround_results(
                     origin_prompt=history[-1]['content'],
                     prediction=output,
                     idx=index,
-                    gold=chat[i]['content'],
+                    gold=gold,
                 )
                 # index += 1
         if self.dialogue_mode:

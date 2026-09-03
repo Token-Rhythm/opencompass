@@ -326,6 +326,9 @@ class ChatOutputHandler:
         if is_structured:
             result_dict['content'] = content
             result_dict['reasoning_content'] = reasoning_content
+        if isinstance(prediction, dict) and prediction.get(
+                'inference_error') is not None:
+            result_dict['inference_error'] = prediction['inference_error']
         self.results_dict[str(idx)] = result_dict
 
     def save_multiround_results(self,
@@ -346,6 +349,13 @@ class ChatOutputHandler:
             result_dict.setdefault('content', []).append(content)
             result_dict.setdefault('reasoning_content',
                                    []).append(reasoning_content)
+        round_error = (prediction.get('inference_error')
+                       if isinstance(prediction, dict) else None)
+        if round_error is not None or 'inference_error' in result_dict:
+            errors = result_dict.setdefault(
+                'inference_error',
+                [None] * (len(result_dict['prediction']) - 1))
+            errors.append(round_error)
         result_dict['origin_prompt'].append(origin_prompt)
         self.results_dict[str(idx)] = result_dict
 

@@ -1,6 +1,6 @@
 from opencompass.openicl.icl_prompt_template import PromptTemplate
 from opencompass.openicl.icl_retriever import ZeroRetriever
-from opencompass.openicl.icl_inferencer import ChatInferencer
+from opencompass.openicl.icl_inferencer import ParallelChatInferencer
 from opencompass.datasets import SciCodeDataset, SciCodeEvaluator
 
 
@@ -13,7 +13,7 @@ SciCode_infer_cfg = dict(
         ),
 
     retriever=dict(type=ZeroRetriever),
-    inferencer=dict(type=ChatInferencer, infer_mode='every'))
+    inferencer=dict(type=ParallelChatInferencer, infer_mode='every'))
 
 SciCode_eval_cfg = dict(evaluator=dict(type=SciCodeEvaluator, dataset_path='./data/scicode', with_bg=False))
 

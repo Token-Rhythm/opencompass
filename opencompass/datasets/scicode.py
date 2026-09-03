@@ -2,9 +2,12 @@ import concurrent.futures
 import json
 import os
 import os.path as osp
+import pwd
 import re
+import shutil
 import subprocess
 import sys
+import uuid
 
 import h5py
 import numpy as np
@@ -257,18 +260,111 @@ class SciCodeEvaluator(BaseEvaluator):
 
         return python_script
 
+    def _sandbox_command(self, script_path, timeout):
+        systemd_run = shutil.which('systemd-run')
+        if systemd_run is None:
+            raise RuntimeError(
+                'SciCode requires systemd-run for sandboxed code execution')
+
+        repo_root = osp.abspath(osp.join(osp.dirname(__file__), '..', '..'))
+        base_executable = getattr(sys, '_base_executable', sys.executable)
+        python_runtime = osp.dirname(osp.dirname(osp.abspath(base_executable)))
+        runtime_uid = os.stat(python_runtime).st_uid
+        sandbox_user = os.getenv(
+            'SCICODE_EVAL_SANDBOX_USER',
+            pwd.getpwuid(runtime_uid).pw_name,
+        )
+        memory_max = os.getenv('SCICODE_EVAL_MEMORY_MAX', '4G')
+        cpu_quota = os.getenv('SCICODE_EVAL_CPU_QUOTA', '100%')
+        tasks_max = os.getenv('SCICODE_EVAL_TASKS_MAX', '64')
+        unit_name = f'opencompass-scicode-{uuid.uuid4().hex[:16]}'
+
+        properties = [
+            f'User={sandbox_user}',
+            f'WorkingDirectory={repo_root}',
+            'PrivateNetwork=yes',
+            'PrivateTmp=yes',
+            'PrivateDevices=yes',
+            'ProtectSystem=strict',
+            'ProtectHome=tmpfs',
+            f'BindReadOnlyPaths={python_runtime}',
+            'ProtectKernelTunables=yes',
+            'ProtectKernelModules=yes',
+            'ProtectKernelLogs=yes',
+            'ProtectControlGroups=yes',
+            'ProtectClock=yes',
+            'ProtectHostname=yes',
+            'ProtectProc=invisible',
+            'ProcSubset=pid',
+            'NoNewPrivileges=yes',
+            'RestrictSUIDSGID=yes',
+            'RestrictRealtime=yes',
+            'RestrictNamespaces=yes',
+            'LockPersonality=yes',
+            'CapabilityBoundingSet=',
+            'RestrictAddressFamilies=AF_UNIX',
+            'RemoveIPC=yes',
+            'UMask=0077',
+            f'MemoryMax={memory_max}',
+            f'TasksMax={tasks_max}',
+            f'CPUQuota={cpu_quota}',
+            f'RuntimeMaxSec={timeout}s',
+        ]
+
+        command = [
+            systemd_run,
+            '--wait',
+            '--collect',
+            '--pipe',
+            '--quiet',
+            f'--unit={unit_name}',
+            '--setenv=HOME=/tmp',
+            '--setenv=TMPDIR=/tmp',
+            '--setenv=MPLCONFIGDIR=/tmp/matplotlib',
+            '--setenv=PYTHONDONTWRITEBYTECODE=1',
+            '--setenv=OPENBLAS_NUM_THREADS=1',
+            '--setenv=OMP_NUM_THREADS=1',
+            '--setenv=MKL_NUM_THREADS=1',
+            '--setenv=NUMEXPR_NUM_THREADS=1',
+        ]
+        command.extend(f'--property={prop}' for prop in properties)
+        command.extend([sys.executable, osp.abspath(script_path)])
+        return command
+
     def run_script(self, script_path):
+        timeout = int(os.getenv('SCICODE_EVAL_TIMEOUT_SECONDS', '120'))
+        if timeout <= 0:
+            raise ValueError('SCICODE_EVAL_TIMEOUT_SECONDS must be positive')
         try:
-            subprocess.run([sys.executable, script_path],
+            subprocess.run(self._sandbox_command(script_path, timeout),
                            check=True,
-                           capture_output=True,
-                           text=True,
-                           timeout=120)
+                           stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL,
+                           timeout=timeout + 15)
             return 0
         except subprocess.CalledProcessError:
             return 1
         except subprocess.TimeoutExpired:
             return 2
+        except (OSError, RuntimeError, ValueError) as error:
+            print(f'SciCode sandbox failed: {error}', file=sys.stderr)
+            return 3
+
+    def _run_scripts(self, python_scripts):
+        max_workers = int(os.getenv('SCICODE_EVAL_MAX_WORKERS', '8'))
+        if max_workers <= 0:
+            raise ValueError('SCICODE_EVAL_MAX_WORKERS must be positive')
+
+        results = []
+        with concurrent.futures.ThreadPoolExecutor(
+                max_workers=max_workers) as executor:
+            future_to_script = {
+                executor.submit(self.run_script, script): script
+                for script in python_scripts
+            }
+            for future in concurrent.futures.as_completed(future_to_script):
+                results.append((future_to_script[future], future.result()))
+        return results
 
     def score(self, predictions, references):
         # generate all python test codes
@@ -280,6 +376,7 @@ class SciCodeEvaluator(BaseEvaluator):
             # create dir for each test sample
             testdir_path = os.path.join(self._out_dir, str(problem_id))
             os.makedirs(testdir_path, exist_ok=True)
+            os.chmod(testdir_path, 0o755)
 
             python_code = ''
             # add import statement
@@ -316,6 +413,7 @@ from opencompass.datasets.scicode import process_hdf5_to_tuple
                         f.write(f'target = targets[{idx2}]\n\n')
                         for line in test_lst[idx2].split('\n'):
                             f.write(line + '\n')
+                os.chmod(testfile_path, 0o644)
 
         # find all scripts
         python_scripts = []
@@ -323,22 +421,11 @@ from opencompass.datasets.scicode import process_hdf5_to_tuple
             for file in files:
                 if file.endswith('.py'):
                     python_scripts.append(os.path.join(root, file))
-
-        # Use ThreadPoolExecutor to concurrently execute scripts
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            # Submit task and obtain Future object
-            futures = [
-                executor.submit(self.run_script, script)
-                for script in python_scripts
-            ]
-
-        results = []
-        for future in concurrent.futures.as_completed(futures):
-            result = future.result()
-            results.append(result)
+        python_scripts.sort()
+        results = self._run_scripts(python_scripts)
 
         all_results = {}
-        for script_path, result in zip(python_scripts, results):
+        for script_path, result in results:
             basename = os.path.basename(script_path)
             main_id = basename.split('-')[0]
             if all_results.get(main_id):
