@@ -1,9 +1,13 @@
 import json
 from pathlib import Path
 
+import numpy as np
 from mmengine.config import Config
 
-from opencompass.datasets.scicode import SciCodeEvaluator
+from opencompass.datasets.scicode import (
+    SCIPY_INTEGRATE_COMPAT_PREAMBLE,
+    SciCodeEvaluator,
+)
 from opencompass.datasets.scicode_official import (
     OFFICIAL_SKIPPED_STEPS,
     OfficialExtractionSciCodeEvaluator,
@@ -74,3 +78,27 @@ def test_official_config_is_isolated_and_uses_official_extraction():
     assert evaluator["type"] is OfficialExtractionSciCodeEvaluator
     assert issubclass(evaluator["type"], SciCodeEvaluator)
     assert "timeout_seconds" not in evaluator
+
+
+def test_scicode_supports_legacy_scipy_simps_import():
+    namespace = {}
+    exec(
+        SCIPY_INTEGRATE_COMPAT_PREAMBLE
+        + "\nfrom scipy.integrate import simps\n"
+        + "value = simps([0.0, 1.0, 4.0], x=[0.0, 1.0, 2.0])\n",
+        namespace,
+    )
+    assert np.isclose(namespace["value"], 8.0 / 3.0)
+
+
+def test_scicode_sandbox_uses_dedicated_runtime_tmp():
+    evaluator = SciCodeEvaluator.__new__(SciCodeEvaluator)
+    command = evaluator._sandbox_command("/tmp/example.py", 120)
+    unit_name = next(
+        argument.removeprefix("--unit=")
+        for argument in command
+        if argument.startswith("--unit=")
+    )
+    assert f"--property=RuntimeDirectory={unit_name}" in command
+    assert f"--setenv=TMPDIR=/run/{unit_name}" in command
+    assert f"--setenv=HOME=/run/{unit_name}" in command

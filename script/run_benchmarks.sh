@@ -211,6 +211,8 @@ Runtime options:
 Notes:
   * ceval selects the EvalScope-compatible C-Eval prompt implementation.
   * gpqa_diamond is the GPQA target used by the validation suite.
+  * scicode selects scicode_official_wbg_gen (official prompt with
+    scientist-annotated background); the legacy scicode_gen is not used.
   * Concurrency is computed per benchmark from the number of assigned vLLM
     replicas. Dataset workers divide that target instead of multiplying it.
   * hmmt_feb_2026 uses 131072 context, 81920 output tokens and the long-output

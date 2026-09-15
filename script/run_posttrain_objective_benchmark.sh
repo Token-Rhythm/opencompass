@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Keep multiprocessing Unix socket paths below Linux's AF_UNIX length limit.
+RUNTIME_TMPDIR="${OPENCOMPASS_RUNTIME_TMPDIR:-/tmp/pipeline-eval-opencompass}"
+mkdir -p "$RUNTIME_TMPDIR"
+export TMPDIR="$RUNTIME_TMPDIR" TMP="$RUNTIME_TMPDIR" TEMP="$RUNTIME_TMPDIR"
+
 # Shared launcher for the complete benchmark suite. Generation tasks use an
 # OpenAI-compatible vLLM chat endpoint; probability tasks such as INCLUDE use
 # the same server's raw completions endpoint with prompt log-probabilities.
@@ -48,9 +53,22 @@ DATASETS_EXPR=""
 DATASET_ABBR_SUFFIX=""
 SUMMARY_GROUP_SUFFIX=""
 DOWNSAMPLING_KEY=""
+INFERENCER_MAX_WORKERS_OVERRIDE="0"
+AGIEVAL_SETTING="zero-shot"
+AGIEVAL_OPTIONS_SET="0"
 DOWNSAMPLING_MANIFEST="$REPO_ROOT/opencompass/configs/datasets/downsampling/manifest.json"
 
 case "$BENCHMARK" in
+  agieval|agieval_v1_1)
+    BENCHMARK_LABEL="AGIEval v1.1"
+    DATASET_MODULE="opencompass.configs.datasets.agieval.agieval_v1_1_gen"
+    DATASET_VARIABLE="agieval_v1_1_datasets"
+    SUMMARY_IMPORT=""
+    SUMMARY_GROUPS_EXPR="agieval_v1_1_summary_groups"
+    SUMMARY_ABBRS_EXPR="[]"
+    # Resolved after protocol options; an explicit --work-dir takes priority.
+    WORK_DIR=""
+    ;;
   mmlu_pro)
     BENCHMARK_LABEL="MMLU-Pro"
     DATASET_MODULE="opencompass.configs.datasets.mmlu_pro.mmlu_pro_5shot_cot_gen"
@@ -184,15 +202,16 @@ case "$BENCHMARK" in
     MAX_OUT_LEN="32768"
     ;;
   scicode)
-    BENCHMARK_LABEL="SciCode"
-    DATASET_MODULE="opencompass.configs.datasets.scicode.scicode_gen"
+    BENCHMARK_LABEL="SciCode official with background"
+    DATASET_MODULE="opencompass.configs.datasets.scicode.scicode_official_wbg_gen"
     DATASET_VARIABLE="SciCode_datasets"
     SUMMARY_IMPORT=""
     SUMMARY_GROUPS_EXPR="[]"
-    SUMMARY_ABBRS_EXPR="[['SciCode', 'accuracy'], ['SciCode', 'sub_accuracy']]"
-    WORK_DIR="outputs/scicode_full_chat"
+    SUMMARY_ABBRS_EXPR="[['SciCode_official_with_background_sandboxed', 'accuracy'], ['SciCode_official_with_background_sandboxed', 'sub_accuracy']]"
+    WORK_DIR="outputs/scicode_official_wbg_full_chat"
     MAX_OUT_LEN="4096"
     OMIT_MAX_OUT_LEN="1"
+    INFERENCER_MAX_WORKERS_OVERRIDE="1"
     ;;
   livecodebench)
     BENCHMARK_LABEL="LiveCodeBench v6 Code Generation"
@@ -346,7 +365,7 @@ case "$BENCHMARK" in
     ;;
   *)
     echo "Unsupported benchmark: $BENCHMARK" >&2
-    echo "Expected one of: mmlu_pro, ceval, ceval_evalscope, supergpqa, gpqa_diamond, ifeval, ifbench, longbenchv2, aa_lcr, aime2024, aime2025, aime2026, hmmt2026, scicode, livecodebench, humaneval, mmmlu, mmlu_prox, global_piqa, mmlu_redux, hmmt_feb_2025, hmmt_nov_2025, multichallenge, include" >&2
+    echo "Expected one of: agieval, mmlu_pro, ceval, ceval_evalscope, supergpqa, gpqa_diamond, ifeval, ifbench, longbenchv2, aa_lcr, aime2024, aime2025, aime2026, hmmt2026, scicode, livecodebench, humaneval, mmmlu, mmlu_prox, global_piqa, mmlu_redux, hmmt_feb_2025, hmmt_nov_2025, multichallenge, include" >&2
     exit 1
     ;;
 esac
@@ -393,6 +412,8 @@ Options:
   --dataset-kwargs-json JSON Extra keyword arguments passed to every selected
                               dataset loader; default: {}
   --run-mode MODE             all, infer, eval, or viz; default: $RUN_MODE
+  --agieval-setting MODE      AGIEval only: zero-shot (default),
+                              or zero-shot-CoT
   --extra-body-json JSON     Default: $EXTRA_BODY_JSON
   --openai-extra-kwargs-json JSON
                               Default: $OPENAI_EXTRA_KWARGS_JSON
@@ -413,6 +434,14 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --agieval-setting)
+      [[ $# -ge 2 && "$2" != --* ]] || {
+        echo "$1 requires a value" >&2; exit 1;
+      }
+      AGIEVAL_OPTIONS_SET="1"
+      AGIEVAL_SETTING="$2"
+      shift 2
+      ;;
     --base-url) BASE_URL="$2"; shift 2 ;;
     --model) MODEL="$2"; shift 2 ;;
     --api-key) API_KEY="$2"; shift 2 ;;
@@ -445,6 +474,30 @@ while [[ $# -gt 0 ]]; do
     *) echo "Unknown argument: $1" >&2; usage; exit 1 ;;
   esac
 done
+
+if [[ "$BENCHMARK" == "agieval" || "$BENCHMARK" == "agieval_v1_1" ]]; then
+  case "$AGIEVAL_SETTING" in
+    zero-shot)
+      AGIEVAL_MODE_SUFFIX="zero_shot_chat"
+      ;;
+    zero-shot-CoT)
+      DATASET_MODULE="opencompass.configs.datasets.agieval.agieval_v1_1_zeroshot_cot_gen"
+      AGIEVAL_MODE_SUFFIX="zero_shot_cot_chat"
+      ;;
+    *)
+      echo "--agieval-setting must be zero-shot or zero-shot-CoT" >&2
+      exit 1
+      ;;
+  esac
+  AGIEVAL_SUMMARY_ROOT="agieval_v1_1_${AGIEVAL_MODE_SUFFIX}"
+  SUMMARY_IMPORT="from ${DATASET_MODULE} import agieval_v1_1_summary_groups"
+  SUMMARY_ABBRS_EXPR="['${AGIEVAL_SUMMARY_ROOT}', '${AGIEVAL_SUMMARY_ROOT}_en', '${AGIEVAL_SUMMARY_ROOT}_zh', '${AGIEVAL_SUMMARY_ROOT}_cloze']"
+  WORK_DIR="${WORK_DIR:-outputs/${AGIEVAL_SUMMARY_ROOT}}"
+  BENCHMARK_LABEL="AGIEval v1.1 (${AGIEVAL_SETTING})"
+elif [[ "$AGIEVAL_OPTIONS_SET" == "1" ]]; then
+  echo "--agieval-* options require the agieval benchmark" >&2
+  exit 1
+fi
 
 for numeric_value in MAX_SEQ_LEN MAX_OUT_LEN BATCH_SIZE RETRY TIMEOUT STREAM_IDLE_TIMEOUT MAX_WORKERS DATASET_WORKERS PREFLIGHT_TIMEOUT PREFLIGHT_ATTEMPTS PREFLIGHT_BACKOFF; do
   value="${!numeric_value}"
@@ -619,6 +672,11 @@ if [[ "$STREAM_RESPONSES" == "1" ]]; then
 else
   STREAM_RESPONSES_PY="False"
 fi
+if [[ "$INFERENCER_MAX_WORKERS_OVERRIDE" == "1" ]]; then
+  INFERENCER_MAX_WORKERS_OVERRIDE_PY="True"
+else
+  INFERENCER_MAX_WORKERS_OVERRIDE_PY="False"
+fi
 MAX_OUT_LEN_PY="$MAX_OUT_LEN"
 if [[ "$OMIT_MAX_OUT_LEN" == "1" ]]; then
   MAX_OUT_LEN_PY="None"
@@ -707,6 +765,14 @@ dataset_abbr_suffix = ${DATASET_ABBR_SUFFIX_PY}
 summary_group_suffix = ${SUMMARY_GROUP_SUFFIX_PY}
 selected_datasets = []
 for dataset in datasets:
+    if dataset.get('type') is not None and dataset.get('setting_name') in (
+            'zero-shot', 'zero-shot-CoT') and dataset.get(
+                'abbr', '').startswith('agieval_v1_1_'):
+        for key in ('setting_name', 'chat_mode'):
+            if key in dataset_kwargs and dataset_kwargs[key] != dataset[key]:
+                raise ValueError(
+                    'Use --agieval-setting to change '
+                    'the protocol; dataset-kwargs must not contradict it.')
     dataset.update(dataset_kwargs)
     dataset_abbr = dataset['abbr']
     if test_ranges and dataset_abbr not in test_ranges:
@@ -721,6 +787,10 @@ for dataset in datasets:
         inferencer = dataset['infer_cfg']['inferencer']
         inferencer['max_seq_len'] = ${MAX_SEQ_LEN}
         inferencer['max_out_len'] = ${MAX_OUT_LEN_PY}
+        if ${INFERENCER_MAX_WORKERS_OVERRIDE_PY}:
+            # Official SciCode parallelizes independent problems here while
+            # keeping each problem's dependent sub-steps sequential.
+            inferencer['max_infer_workers'] = ${MAX_WORKERS}
     evaluator_dataset = dataset['eval_cfg']['evaluator'].get('dataset_cfg')
     if evaluator_dataset is not None:
         if test_ranges:

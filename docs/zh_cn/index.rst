@@ -36,6 +36,8 @@ OpenCompass 上手路线
    user_guides/framework_overview.md
    user_guides/config.md
    user_guides/datasets.md
+   user_guides/benchmark_integrations.md
+   user_guides/agieval_v1_1.md
    user_guides/models.md
    user_guides/evaluation.md
    user_guides/experimentation.md

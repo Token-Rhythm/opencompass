@@ -23,6 +23,25 @@ from opencompass.utils import get_data_path
 from .base import BaseDataset
 
 
+# SciCode's published test programs still import scipy.integrate.simps, which
+# was removed in SciPy 1.14. Keep the benchmark compatible with newer
+# OpenCompass environments without downgrading SciPy for unrelated datasets.
+SCIPY_INTEGRATE_COMPAT_PREAMBLE = '''\
+import scipy.integrate as _scicode_scipy_integrate
+if not hasattr(_scicode_scipy_integrate, "simps"):
+    def _scicode_simps(y, x=None, dx=1.0, axis=-1, even=None):
+        if even not in (None, "simpson"):
+            raise ValueError(
+                "SciCode's SciPy compatibility wrapper only supports the "
+                "default even='simpson' behavior"
+            )
+        return _scicode_scipy_integrate.simpson(
+            y, x=x, dx=dx, axis=axis
+        )
+    _scicode_scipy_integrate.simps = _scicode_simps
+'''
+
+
 @LOAD_DATASET.register_module()
 class SciCodeDataset(BaseDataset):
 
@@ -278,10 +297,16 @@ class SciCodeEvaluator(BaseEvaluator):
         cpu_quota = os.getenv('SCICODE_EVAL_CPU_QUOTA', '100%')
         tasks_max = os.getenv('SCICODE_EVAL_TASKS_MAX', '64')
         unit_name = f'opencompass-scicode-{uuid.uuid4().hex[:16]}'
+        runtime_dir = unit_name
+        script_path = osp.abspath(script_path)
+        sandbox_script_path = f'/run/{runtime_dir}/candidate.py'
 
         properties = [
             f'User={sandbox_user}',
             f'WorkingDirectory={repo_root}',
+            f'RuntimeDirectory={runtime_dir}',
+            'RuntimeDirectoryMode=0700',
+            f'BindReadOnlyPaths={script_path}:{sandbox_script_path}',
             'PrivateNetwork=yes',
             'PrivateTmp=yes',
             'PrivateDevices=yes',
@@ -318,9 +343,9 @@ class SciCodeEvaluator(BaseEvaluator):
             '--pipe',
             '--quiet',
             f'--unit={unit_name}',
-            '--setenv=HOME=/tmp',
-            '--setenv=TMPDIR=/tmp',
-            '--setenv=MPLCONFIGDIR=/tmp/matplotlib',
+            f'--setenv=HOME=/run/{runtime_dir}',
+            f'--setenv=TMPDIR=/run/{runtime_dir}',
+            f'--setenv=MPLCONFIGDIR=/run/{runtime_dir}/matplotlib',
             '--setenv=PYTHONDONTWRITEBYTECODE=1',
             '--setenv=OPENBLAS_NUM_THREADS=1',
             '--setenv=OMP_NUM_THREADS=1',
@@ -328,7 +353,7 @@ class SciCodeEvaluator(BaseEvaluator):
             '--setenv=NUMEXPR_NUM_THREADS=1',
         ]
         command.extend(f'--property={prop}' for prop in properties)
-        command.extend([sys.executable, osp.abspath(script_path)])
+        command.extend([sys.executable, sandbox_script_path])
         return command
 
     def run_script(self, script_path):
@@ -339,10 +364,31 @@ class SciCodeEvaluator(BaseEvaluator):
             subprocess.run(self._sandbox_command(script_path, timeout),
                            check=True,
                            stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL,
+                           stderr=subprocess.PIPE,
+                           text=True,
                            timeout=timeout + 15)
             return 0
-        except subprocess.CalledProcessError:
+        except subprocess.CalledProcessError as error:
+            stderr = (error.stderr or '').strip()
+            infrastructure_markers = (
+                'No usable temporary directory',
+                'Failed to set up mount namespacing',
+                'Failed to start transient service unit',
+                'Failed to determine user credentials',
+            )
+            script_launch_failed = (
+                "can't open file" in stderr
+                and ('Permission denied' in stderr
+                     or 'No such file or directory' in stderr)
+            )
+            if (any(marker in stderr for marker in infrastructure_markers)
+                    or script_launch_failed):
+                print(
+                    f'SciCode sandbox infrastructure failure for '
+                    f'{script_path}: {stderr}',
+                    file=sys.stderr,
+                )
+                return 3
             return 1
         except subprocess.TimeoutExpired:
             return 2
@@ -378,7 +424,7 @@ class SciCodeEvaluator(BaseEvaluator):
             os.makedirs(testdir_path, exist_ok=True)
             os.chmod(testdir_path, 0o755)
 
-            python_code = ''
+            python_code = SCIPY_INTEGRATE_COMPAT_PREAMBLE
             # add import statement
             python_code += self.dataset[idx]['import']
 
@@ -423,6 +469,17 @@ from opencompass.datasets.scicode import process_hdf5_to_tuple
                     python_scripts.append(os.path.join(root, file))
         python_scripts.sort()
         results = self._run_scripts(python_scripts)
+
+        infrastructure_failures = [
+            script_path for script_path, result in results if result == 3
+        ]
+        if infrastructure_failures:
+            examples = ', '.join(infrastructure_failures[:3])
+            raise RuntimeError(
+                'SciCode scoring stopped because '
+                f'{len(infrastructure_failures)} sandbox executions failed '
+                f'at the infrastructure layer. Examples: {examples}'
+            )
 
         all_results = {}
         for script_path, result in results:
