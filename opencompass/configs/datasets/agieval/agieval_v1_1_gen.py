@@ -1,13 +1,13 @@
 """AGIEval v1.1, zero-shot, one model response per question."""
 
-from opencompass.datasets.agieval.agieval import AGIEvalEvaluator
+from opencompass.datasets.agieval.agieval_v1_1_cloze import AGIEvalV11ClozeEvaluator
 from opencompass.datasets.agieval.agieval_v1_1 import AGIEvalV11Dataset
 from opencompass.datasets.agieval.agieval_v1_1_postprocess import agieval_mathqa_postprocess
 from opencompass.openicl.icl_evaluator import AccEvaluator
 from opencompass.openicl.icl_inferencer import GenInferencer
 from opencompass.openicl.icl_raw_prompt_template import RawPromptTemplate
 from opencompass.openicl.icl_retriever import ZeroRetriever
-from opencompass.utils.text_postprocessors import first_option_postprocess
+from opencompass.datasets.agieval.agieval_v1_1_postprocess import agieval_single_choice_postprocess
 
 _tasks = [
     'gaokao-chinese', 'gaokao-english', 'gaokao-geography',
@@ -26,7 +26,7 @@ _group = 'agieval_v1_1_zero_shot_chat'
 agieval_v1_1_datasets = []
 for _name in _tasks:
     if _name in _cloze:
-        _evaluation = dict(evaluator=dict(type=AGIEvalEvaluator))
+        _evaluation = dict(evaluator=dict(type=AGIEvalV11ClozeEvaluator))
     elif _name == 'gaokao-mathqa':
         _evaluation = dict(
             evaluator=dict(type=AccEvaluator),
@@ -34,7 +34,7 @@ for _name in _tasks:
     else:
         _evaluation = dict(
             evaluator=dict(type=AccEvaluator),
-            pred_postprocessor=dict(type=first_option_postprocess,
+            pred_postprocessor=dict(type=agieval_single_choice_postprocess,
                                     options='ABCDE'))
     agieval_v1_1_datasets.append(dict(
         type=AGIEvalV11Dataset, path='./data/AGIEval/data/v1_1',

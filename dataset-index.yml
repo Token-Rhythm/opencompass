@@ -1429,3 +1429,14 @@
     paper: https://arxiv.org/abs/2502.01100
     configpath: opencompass/configs/datasets/ZebraLogic/zebralogic_rawprompt_gen_9446ef.py
     configpath_llmjudge: ''
+
+- jevbench:
+    name: jevbench
+    category: Understanding
+    paper: https://github.com/fstandhartinger/jevbench
+    configpath: opencompass/configs/datasets/jevbench/jevbench_gen.py
+- kev:
+    name: kev
+    category: Understanding
+    paper: https://github.com/jaredpalmer/kev
+    configpath: opencompass/configs/datasets/kev/kev_gen.py

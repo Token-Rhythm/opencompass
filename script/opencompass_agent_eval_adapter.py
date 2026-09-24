@@ -71,6 +71,13 @@ _OPENAI_SAMPLING_KEYS = {
 # aliases are exact Agent Eval catalog candidates; resolution still has to be
 # unique, so this table can never silently pick between catalog versions.
 BENCHMARK_SPECS: dict[str, dict[str, Any]] = {
+    'jevbench_public': {'summary_datasets': ['jevbench_public'], 'summary_metrics': ['accuracy'], 'benchmark_aliases': ['JevBench Public', 'jevbench-public'], 'benchmark_version': 'repository-public-75e6224ed810', 'split': 'public', 'metric_aliases': ['accuracy']},
+    'kev_decision_v7_dev': {'summary_datasets': ['kev_decision_v7_dev'], 'summary_metrics': ['accuracy'], 'benchmark_aliases': ['kev_decision_v7_dev'], 'benchmark_version': '90990a5fac29', 'split': 'development', 'metric_aliases': ['accuracy']},
+    'kev_decision_v7_test': {'summary_datasets': ['kev_decision_v7_test'], 'summary_metrics': ['accuracy'], 'benchmark_aliases': ['kev_decision_v7_test'], 'benchmark_version': '90990a5fac29', 'split': 'test', 'metric_aliases': ['accuracy']},
+    'kev_transfer_v4_dev': {'summary_datasets': ['kev_transfer_v4_dev'], 'summary_metrics': ['accuracy'], 'benchmark_aliases': ['kev_transfer_v4_dev'], 'benchmark_version': '90990a5fac29', 'split': 'development', 'metric_aliases': ['accuracy']},
+    'kev_transfer_v4_test': {'summary_datasets': ['kev_transfer_v4_test'], 'summary_metrics': ['accuracy'], 'benchmark_aliases': ['kev_transfer_v4_test'], 'benchmark_version': '90990a5fac29', 'split': 'test', 'metric_aliases': ['accuracy']},
+    'kev_transfer_v9_dev': {'summary_datasets': ['kev_transfer_v9_dev'], 'summary_metrics': ['accuracy'], 'benchmark_aliases': ['kev_transfer_v9_dev'], 'benchmark_version': '90990a5fac29', 'split': 'development', 'metric_aliases': ['accuracy']},
+    'kev_transfer_v9_test': {'summary_datasets': ['kev_transfer_v9_test'], 'summary_metrics': ['accuracy'], 'benchmark_aliases': ['kev_transfer_v9_test'], 'benchmark_version': '90990a5fac29', 'split': 'test', 'metric_aliases': ['accuracy']},
     'mmlu_pro': {
         'summary_datasets': ['mmlu_pro'],
         'summary_metrics': ['accuracy'],

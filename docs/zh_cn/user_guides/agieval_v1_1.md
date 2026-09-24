@@ -52,36 +52,44 @@ system 为 "You are a helpful AI assistant."，user 内容由现有 AGIEval 提�
 
 ## 答案提取和匹配
 
-### 高考数学选择题
+v1.1 使用独立解析器，不修改旧版 AGIEval 或其他 benchmark 的公共解析规则。
+仅处理最终 content，不把 reasoning_content 拼进答案；不发起二阶段请求或 LLM 判分。
 
-所有 351 题统一使用 agieval_mathqa_postprocess，而不是根据标准答案决定提取方式。
+### 选择题
 
-1. 优先识别“最终答案 / 最后答案 / final answer”；没有时识别普通答案标记、
-   “因此选 / 故选”等结论标记。相同优先级使用最后出现的标记。
-2. 从标记后的答案行或答案句中解析选项；没有标记时支持末尾 boxed 答案
-   或最后一行的纯选项。不会从整段分析中收集所有出现过的字母。
-3. 支持连续字母、空格、逗号、顿号、括号、列表、和/及/与/and、
-   常见 Markdown 或 LaTeX 包装。选项限 A–D；统一大小写、去重、排序。
-4. 标准标签去除空白、去重、排序，再由 AccEvaluator 完全匹配。
-   不给部分分；少选、多选均错。单选标准答案为 B 时，预测 AB 也判错。
-5. 空输出、无法识别的输出、“A 或 D / A or D / A/D”等歧义表达提取为空，
-   按错误计入分母，不丢弃样本。
+1. 优先读取“最终答案 / final answer”，其次读取“答案是 / 应选 / 应选择 /
+   Answer / Answer Choices”等明确结论。相同优先级取最后一个符合答案形式的标记，
+   避免把“选项分析”“选择沉默”等普通叙述当作结论。
+2. 支持 Markdown 粗体、引用、括号以及 LaTeX boxed、行内或跨行公式；
+   支持选项后的数值或解释，如 `应选 **(A) 0.8**`。
+3. 高考数学 351 题统一使用 agieval_mathqa_postprocess，支持 A–D 的连续字母、
+   空格、逗号、顿号、列表和“和/及/与/and”。标准答案与预测均去重排序，
+   通过 AccEvaluator 完整匹配；少选、多选均错，不给部分分。
+4. 其他选择题使用 agieval_single_choice_postprocess，选项范围 A–E。
+   没有明确答案时，先检查末尾纯选项或公式，再按文本顺序提取第一个大写选项字母保底。
+   明确输出 AB 等多个选项时判无效，不取其中第一个字母。
+5. 明确结论中的 `A 或 D`、`A or D`、`A/D` 等歧义表达判无效。
+   高考数学没有从整段分析收集字母或取首字母的保底策略。
 
-例如标准答案为 AD 时，AD、A D、D，A、["A", "D"] 均正确；
-A、ABD 则错误。带分析的“B 不正确，最终答案是 A、D。”提取为 AD。
+代码：opencompass/datasets/agieval/agieval_v1_1_postprocess.py。
 
-数学选项支持换行的 \[...\]、\(...\) 和 $$...$$ 公式包装，以及其中的 \boxed{AD}。遇到答案标记时先读取完整公式块，再解析整个选项表达式，避免在公式首行截断。仍拒绝 A 或 D、少选、多选和公式后同句的歧义补充；不从分析过程搜集字母。
+### 填空题
 
-这是保守的规则解析，不是语义判分。最终答案中混入未支持的说明文字时可能提取失败；
-可通过预测结果与评测 details 排查。规则以
-opencompass/datasets/agieval/agieval_v1_1_postprocess.py 为准。
+math 与 gaokao-mathcloze 使用 AGIEvalV11ClozeEvaluator：
 
-### 其他任务
+- 优先处理明确答案段；支持带嵌套花括号的 boxed/fbox 和常见数学公式包装。
+  没有明确答案段时，读取末尾相邻的 boxed 答案组或数学公式组。
+- 识别同一答案组中的多个空，按原顺序提取。参考答案用分号分隔；
+  顶层分隔符可拆分多个值，坐标、区间、分式内部不拆分。
+  不使用标准答案的内容或空数指导预测提取。
+- 两侧均去掉 `$…$` 等包装，规范字体、百分号和变量赋值格式，
+  保留 `2x+y+1=0`、`y=2x` 等完整方程。支持文字填空和带单位的数值回答。
+- 规范化后沿用 is_equiv 的字符串比较。多个空数量、顺序和每一项都匹配才得分；
+  不做符号代数求解，不采用数值容差，不以部分匹配判对。
 
-- 其他选择题：复用 first_option_postprocess(options='ABCDE') 和 AccEvaluator。
-- 两个填空任务 math、gaokao-mathcloze：复用 AGIEvalEvaluator、
-  parse_math_answer 和 is_equiv。
-- 评分沿用当前框架对最终 content 的处理，不将单独的 reasoning_content 拼入最终答案。
+代码：opencompass/datasets/agieval/agieval_v1_1_cloze.py。
+这些规则扩展了旧版格式处理，不等同于官方原始评分脚本。
+表达式虽然数学等价但书写不同，或自然语言结论无法被规则识别时，仍可能判错。
 
 ## 启动方式
 
@@ -146,6 +154,7 @@ outputs/agieval_v1_1_zero_shot_cot_chat，可通过 --work-dir 覆盖。
 PYTHONDONTWRITEBYTECODE=1 HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 \
   ../opencompass-venv/bin/python -B -m pytest \
   tests/datasets/test_agieval_v1_1.py \
+  tests/datasets/test_agieval_v1_1_extraction.py \
   tests/datasets/test_agieval.py \
   tests/datasets/test_run_benchmark_launcher.py -q
 ~~~

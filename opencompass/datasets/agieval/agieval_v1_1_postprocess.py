@@ -30,9 +30,9 @@ def _option_expression(text):
     text = text.translate(str.maketrans('', '', "()[]{}'\"*$" + chr(96)))
     text = text.strip().upper()
     separator = r'(?:\s*[,、&;]\s*|\s+|[和及与])'
-    if not re.fullmatch(rf'[A-D](?:{separator}?[A-D])*', text):
+    if not re.fullmatch(rf'[A-E](?:{separator}?[A-E])*', text):
         return ''
-    return ''.join(sorted(set(re.findall(r'[A-D]', text))))
+    return ''.join(sorted(set(re.findall(r'[A-E]', text))))
 
 
 _FINAL_ANSWER = re.compile(
@@ -57,41 +57,101 @@ def _math_block_options(match):
         group for group in match.groups() if group is not None))
 
 
-@TEXT_POSTPROCESSORS.register_module()
-def agieval_mathqa_postprocess(text):
-    """Extract one final option set; empty/ambiguous answers score as wrong.
 
-    Explicit final-answer markers take priority over ordinary answer markers.
-    Use the last marker at that priority, or an unmarked final answer line.
-    The selected answer must consist entirely of an option expression.
-    No reference answer is consulted and no second model call is made.
-    """
+
+def _leading_options(candidate):
+    """Read an answer at the start, allowing a following option description."""
+    candidate = re.sub(r'^[\s*>:：]+', '', candidate)
+    candidate = re.sub(r'^(?:应当|应该|应)(?:选择|选)\s*[:：]?\s*', '', candidate)
+    block = _MATH_BLOCK.match(candidate)
+    if block:
+        suffix = candidate[block.end():].strip()
+        if re.match(r'[,，]?\s*(?:但也可能|或\s*[*($]*[A-E]|or\s+[A-E]\b)', suffix, re.I):
+            return ''
+        return _math_block_options(block)
+    candidate = candidate.splitlines()[0]
+    # Remove formatting, but keep prose so an English word is never an option.
+    for _ in range(3):
+        candidate = re.sub(r'\\(?:boxed|text|mathrm)\s*\{([^{}]*)\}',
+                           r'\1', candidate)
+    candidate = candidate.replace('**', '').replace('选项', '').strip()
+    whole = _option_expression(candidate)
+    if whole:
+        return whole
+    labelled = re.match(r'^\(([A-E]+)\)\s+(.+)', candidate)
+    if labelled and not re.match(
+            r'[,，、&;和及与/(]|and\b|or\b|或|但也可能', labelled.group(2), re.I):
+        return ''.join(sorted(set(labelled.group(1))))
+    atom = r'(?:\([A-E]+\)|\[[A-E]+\]|[A-E]+)(?![A-Za-z])'
+    match = re.match(rf'{atom}(?:(?:[ \t]*[,，、&;和及与][ \t]*|[ \t]+(?:and[ \t]+)?){atom})*',
+                     candidate)
+    if not match:
+        return ''
+    end = match.end()
+    if re.match(r'\s*[,，]?\s*(?:但也可能|或|or\b|/)', candidate[end:], re.I):
+        return ''
+    # No prefix of an English word, invalid option, or slash alternative.
+    if end < len(candidate) and (candidate[end] == '/' or (
+            candidate[end].isascii() and candidate[end].isalpha()
+            and not re.search(r'[\s)\]}]$', match.group()))):
+        return ''
+    return ''.join(sorted(set(re.findall(r'[A-E]', match.group()))))
+
+
+# Standalone conclusions also occur without 因此/所以.
+_ANSWER = re.compile(
+    _ANSWER.pattern.replace('(?:是|为|选)', '(?:是|为|选择|选)')
+    .replace('(?:选择|选)', '(?:选择|选)(?!项|择)')
+    .replace(r'answers?\s*', r'answers?(?:\s+choices?)?\s*')
+    + r'|(?:应当|应该|应)(?:选择|选)(?!项|择)\s*[:：]?\s*'
+    r'|(?:^|[\n。])\s*选(?!项|择)\s*[:：]?\s*'
+    r'|选择(?=\s*[*（(]*[A-E])\s*', re.I)
+
+
+def _choice_answer(text, single):
     if not isinstance(text, str) or not text.strip():
         return ''
     text = unicodedata.normalize('NFKC', text).strip()
-    matches = list(_FINAL_ANSWER.finditer(text)) or list(_ANSWER.finditer(text))
+    matches = list(_FINAL_ANSWER.finditer(text))
+    if not matches:
+        matches = [m for m in _ANSWER.finditer(text) if re.match(
+            r'[\s*>:：]*(?:[A-E（(\[\x27\"]|\\|\$|不确定|无法确定)',
+            text[m.end():])]
     if matches:
-        candidate = text[matches[-1].end():].strip()
-        # Preserve a complete math block before splitting prose into lines.
-        # Its body still has to be an entire, unambiguous option expression.
-        math_block = _MATH_BLOCK.match(candidate)
-        if math_block:
-            suffix = candidate[math_block.end():]
-            if suffix.strip() and not re.match(
-                    r'^[ \t]*(?:\n|[。.!！])', suffix):
-                return ''
-            return _math_block_options(math_block)
-        # A sentence after the answer may explain it. Do not search that prose.
-        candidate = re.split(r'[\n。.!！]', candidate, maxsplit=1)[0]
-        return _option_expression(candidate)
-    # A standalone final formula can span lines without an answer marker.
-    math_blocks = list(_MATH_BLOCK.finditer(text))
-    if math_blocks:
-        math_block = math_blocks[-1]
-        if re.fullmatch(r'\s*[。.！!]*\s*', text[math_block.end():]):
-            return _math_block_options(math_block)
-    # A final boxed answer is also explicit, including one following prose.
-    boxed = re.search(r'\\boxed\s*\{([^{}]*)\}\s*[$*。.！!]*$', text)
-    if boxed:
-        return _option_expression(boxed.group(1))
-    return _option_expression(text.splitlines()[-1])
+        value = _leading_options(text[matches[-1].end():])
+    else:
+        value = _option_expression(text.splitlines()[-1])
+        if not value:
+            boxes = list(_MATH_BLOCK.finditer(text))
+            if boxes and not text[boxes[-1].end():].strip(' 。.!！'):
+                value = _math_block_options(boxes[-1])
+        if not value:
+            boxed = re.search(r'\\boxed\s*\{([^{}]*)\}\s*[$*。.！!]*$', text)
+            if boxed:
+                value = _option_expression(boxed.group(1))
+        if not value and re.match(r'^(?:\([A-E]+\)|[A-E]+[.:：])\s', text):
+            value = _leading_options(text.splitlines()[0])
+        if not value and single:
+            # User-requested fallback: first capital option in textual order.
+            # A standalone multi-answer must not silently become its first one.
+            standalone = re.fullmatch(r'[A-E\s,、]+', text)
+            if standalone:
+                value = ''.join(sorted(set(re.findall(r'[A-E]', text))))
+            else:
+                match = re.search(r'[A-E]', text)
+                value = match.group() if match else ''
+    if single:
+        return value if len(value) == 1 else ''
+    return value if re.fullmatch(r'[A-D]+', value) else ''
+
+
+@TEXT_POSTPROCESSORS.register_module()
+def agieval_single_choice_postprocess(text, options='ABCDE'):
+    """Explicit answer first, then first-capital fallback; reject option sets."""
+    answer = _choice_answer(text, single=True)
+    return answer if answer in options else ''
+
+
+@TEXT_POSTPROCESSORS.register_module()
+def agieval_mathqa_postprocess(text):
+    return _choice_answer(text, single=False)

@@ -23,6 +23,8 @@ from opencompass.openicl.icl_raw_prompt_template import RawPromptTemplate
 from opencompass.openicl.icl_retriever import ZeroRetriever
 from opencompass.tasks.openicl_eval import extract_prediction_content
 from opencompass.utils.text_postprocessors import first_option_postprocess
+from opencompass.datasets.agieval.agieval_v1_1_cloze import AGIEvalV11ClozeEvaluator
+from opencompass.datasets.agieval.agieval_v1_1_postprocess import agieval_single_choice_postprocess
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = ROOT / 'opencompass/configs/datasets/agieval'
@@ -87,14 +89,14 @@ def test_configs_use_single_pass_and_common_choice_scorer(filename, setting, cha
         assert dataset['infer_cfg']['inferencer']['type'] is GenInferencer
         evaluation = dataset['eval_cfg']
         if dataset['name'] in ('math', 'gaokao-mathcloze'):
-            assert evaluation['evaluator']['type'] is AGIEvalEvaluator
+            assert evaluation['evaluator']['type'] is AGIEvalV11ClozeEvaluator
         elif dataset['name'] == 'gaokao-mathqa':
             assert evaluation['evaluator']['type'] is AccEvaluator
             assert evaluation['pred_postprocessor']['type'] is agieval_mathqa_postprocess
         else:
             assert evaluation['evaluator']['type'] is AccEvaluator
             assert evaluation['pred_postprocessor'] == dict(
-                type=first_option_postprocess, options='ABCDE')
+                type=agieval_single_choice_postprocess, options='ABCDE')
     groups = cfg.agieval_v1_1_summary_groups
     assert [len(g['subsets']) for g in groups] == [21, 8, 11, 2]
     assert all(subset in {d['abbr'] for d in datasets}

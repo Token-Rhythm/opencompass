@@ -40,6 +40,7 @@ PREFLIGHT_ATTEMPTS="${PREFLIGHT_ATTEMPTS:-3}"
 PREFLIGHT_BACKOFF="${PREFLIGHT_BACKOFF:-5}"
 EXTRA_BODY_JSON='{"top_k":20,"min_p":0.0,"top_p":0.95,"presence_penalty":1.5,"repetition_penalty":1.0}'
 OPENAI_EXTRA_KWARGS_JSON='{}'
+MODEL_IMPORT="from opencompass.models import VLLMOpenAIAPI"
 INPUT_TRUNCATION_MODE="none"
 SAMPLES="all"
 DRY_RUN="0"
@@ -56,9 +57,39 @@ DOWNSAMPLING_KEY=""
 INFERENCER_MAX_WORKERS_OVERRIDE="0"
 AGIEVAL_SETTING="zero-shot"
 AGIEVAL_OPTIONS_SET="0"
+KEV_PARTITION="development"
+KEV_PARTITION_SET="0"
 DOWNSAMPLING_MANIFEST="$REPO_ROOT/opencompass/configs/datasets/downsampling/manifest.json"
 
 case "$BENCHMARK" in
+  jevbench)
+    MODEL_IMPORT="from opencompass.models.decision_api import JevBenchOpenAIAPI as VLLMOpenAIAPI"
+    BENCHMARK_LABEL="jevbench (pinned public data; verbalized probabilities)"
+    DATASET_MODULE="opencompass.configs.datasets.jevbench.jevbench_gen"
+    DATASET_VARIABLE="jevbench_datasets"
+    SUMMARY_IMPORT=""
+    SUMMARY_GROUPS_EXPR="[]"
+    SUMMARY_ABBRS_EXPR="[['jevbench_public', 'accuracy'], ['jevbench_public', 'brier'], ['jevbench_public', 'ece'], ['jevbench_public', 'schema_validity']]"
+    WORK_DIR="outputs/jevbench_decisions_chat"
+    TEMPERATURE="0"
+    MAX_OUT_LEN="4096"
+    EXTRA_BODY_JSON='{}'
+    OPENAI_EXTRA_KWARGS_JSON='{}'
+    ;;
+  kev)
+    MODEL_IMPORT="from opencompass.models.decision_api import DecisionOpenAIAPI as VLLMOpenAIAPI"
+    BENCHMARK_LABEL="kev (pinned public data; verbalized probabilities)"
+    DATASET_MODULE="opencompass.configs.datasets.kev.kev_gen"
+    DATASET_VARIABLE="kev_datasets"
+    SUMMARY_IMPORT=""
+    SUMMARY_GROUPS_EXPR="[]"
+    SUMMARY_ABBRS_EXPR="[['kev_decision_v7_dev', 'accuracy'], ['kev_decision_v7_dev', 'brier'], ['kev_decision_v7_dev', 'ece'], ['kev_decision_v7_dev', 'schema_validity'], ['kev_transfer_v4_dev', 'accuracy'], ['kev_transfer_v4_dev', 'brier'], ['kev_transfer_v4_dev', 'ece'], ['kev_transfer_v4_dev', 'schema_validity'], ['kev_transfer_v9_dev', 'accuracy'], ['kev_transfer_v9_dev', 'brier'], ['kev_transfer_v9_dev', 'ece'], ['kev_transfer_v9_dev', 'schema_validity']]"
+    WORK_DIR="outputs/kev_decisions_chat"
+    TEMPERATURE="0"
+    MAX_OUT_LEN="4096"
+    EXTRA_BODY_JSON='{}'
+    OPENAI_EXTRA_KWARGS_JSON='{"response_format":{"type":"json_object"}}'
+    ;;
   agieval|agieval_v1_1)
     BENCHMARK_LABEL="AGIEval v1.1"
     DATASET_MODULE="opencompass.configs.datasets.agieval.agieval_v1_1_gen"
@@ -365,7 +396,7 @@ case "$BENCHMARK" in
     ;;
   *)
     echo "Unsupported benchmark: $BENCHMARK" >&2
-    echo "Expected one of: agieval, mmlu_pro, ceval, ceval_evalscope, supergpqa, gpqa_diamond, ifeval, ifbench, longbenchv2, aa_lcr, aime2024, aime2025, aime2026, hmmt2026, scicode, livecodebench, humaneval, mmmlu, mmlu_prox, global_piqa, mmlu_redux, hmmt_feb_2025, hmmt_nov_2025, multichallenge, include" >&2
+    echo "Expected one of: jevbench, kev, agieval, mmlu_pro, ceval, ceval_evalscope, supergpqa, gpqa_diamond, ifeval, ifbench, longbenchv2, aa_lcr, aime2024, aime2025, aime2026, hmmt2026, scicode, livecodebench, humaneval, mmmlu, mmlu_prox, global_piqa, mmlu_redux, hmmt_feb_2025, hmmt_nov_2025, multichallenge, include" >&2
     exit 1
     ;;
 esac
@@ -412,6 +443,7 @@ Options:
   --dataset-kwargs-json JSON Extra keyword arguments passed to every selected
                               dataset loader; default: {}
   --run-mode MODE             all, infer, eval, or viz; default: $RUN_MODE
+  --kev-partition MODE        Kev only: development (default) or test
   --agieval-setting MODE      AGIEval only: zero-shot (default),
                               or zero-shot-CoT
   --extra-body-json JSON     Default: $EXTRA_BODY_JSON
@@ -442,6 +474,7 @@ while [[ $# -gt 0 ]]; do
       AGIEVAL_SETTING="$2"
       shift 2
       ;;
+    --kev-partition) KEV_PARTITION="$2"; KEV_PARTITION_SET="1"; shift 2 ;;
     --base-url) BASE_URL="$2"; shift 2 ;;
     --model) MODEL="$2"; shift 2 ;;
     --api-key) API_KEY="$2"; shift 2 ;;
@@ -497,6 +530,21 @@ if [[ "$BENCHMARK" == "agieval" || "$BENCHMARK" == "agieval_v1_1" ]]; then
 elif [[ "$AGIEVAL_OPTIONS_SET" == "1" ]]; then
   echo "--agieval-* options require the agieval benchmark" >&2
   exit 1
+fi
+
+if [[ "$KEV_PARTITION_SET" == "1" && "$BENCHMARK" != "kev" ]]; then
+  echo "--kev-partition only applies to kev" >&2; exit 1
+fi
+if [[ "$BENCHMARK" == "kev" ]]; then
+  case "$KEV_PARTITION" in
+    development) ;;
+    test)
+      DATASET_MODULE="opencompass.configs.datasets.kev.kev_test_gen"
+      DATASET_VARIABLE="kev_test_datasets"
+      SUMMARY_ABBRS_EXPR="${SUMMARY_ABBRS_EXPR//_dev/_test}"
+      ;;
+    *) echo "--kev-partition must be development or test" >&2; exit 1 ;;
+  esac
 fi
 
 for numeric_value in MAX_SEQ_LEN MAX_OUT_LEN BATCH_SIZE RETRY TIMEOUT STREAM_IDLE_TIMEOUT MAX_WORKERS DATASET_WORKERS PREFLIGHT_TIMEOUT PREFLIGHT_ATTEMPTS PREFLIGHT_BACKOFF; do
@@ -702,7 +750,7 @@ CONFIG_PATH="$TMP_DIR/${BENCHMARK}_${PROTOCOL}.py"
 
 cat > "$CONFIG_PATH" <<PY
 from mmengine.config import read_base
-from opencompass.models import VLLMOpenAIAPI
+$MODEL_IMPORT
 
 with read_base():
     from ${DATASET_MODULE} import ${DATASET_VARIABLE}
@@ -773,6 +821,10 @@ for dataset in datasets:
                 raise ValueError(
                     'Use --agieval-setting to change '
                     'the protocol; dataset-kwargs must not contradict it.')
+    if dataset.get('abbr', '').startswith('kev_'):
+        for identity_field in ('suite', 'partition'):
+            if identity_field in dataset_kwargs and dataset_kwargs[identity_field] != dataset[identity_field]:
+                raise ValueError('Use --kev-partition or an explicit dataset config; do not relabel a Kev suite.')
     dataset.update(dataset_kwargs)
     dataset_abbr = dataset['abbr']
     if test_ranges and dataset_abbr not in test_ranges:
